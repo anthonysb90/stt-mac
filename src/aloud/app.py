@@ -73,9 +73,7 @@ class AloudApp(rumps.App):
             trailing_space=bool(config.get("output.trailing_space", True)),
         )
         self.feedback = Feedback(config.get("feedback", {}))
-        self.engine = engines.build(
-            config.get("engine", engines.DEFAULT_ENGINE), config.engine_options()
-        )
+        self.engine = engines.select(config)
         self.listener: Optional[hotkey_mod.HotkeyListener] = None
 
         self._jobs: "queue.Queue[object]" = queue.Queue()
@@ -95,6 +93,10 @@ class AloudApp(rumps.App):
         self.last_item = rumps.MenuItem("Last: —")
 
         engine_menu = rumps.MenuItem("Switch Engine")
+        auto_label = f"Automatic ({engines.REGISTRY[engines.resolve(engines.AUTO)].label})"
+        engine_menu.add(
+            rumps.MenuItem(auto_label, callback=self._make_engine_switch(engines.AUTO))
+        )
         for name in engines.names():
             engine_menu.add(
                 rumps.MenuItem(
@@ -122,7 +124,8 @@ class AloudApp(rumps.App):
     def _refresh_labels(self) -> None:
         ok, detail = self.engine.check()
         prefix = "" if ok else "⚠ "
-        self.engine_item.title = f"{prefix}Engine: {self.engine.label}"
+        auto = " (auto)" if self.config.get("engine") == engines.AUTO else ""
+        self.engine_item.title = f"{prefix}Engine: {self.engine.label}{auto}"
         self.engine_item.set_callback(lambda _: rumps.alert(self.engine.label, detail))
         self.hotkey_item.title = (
             f"Hotkey: hold {hotkey_mod.describe(self.config.get('hotkey.key'))}"
@@ -134,9 +137,11 @@ class AloudApp(rumps.App):
         def switch(_sender) -> None:
             self.config.set("engine", name)
             self.config.save()
-            self.engine = engines.build(name, self.config.engine_options(name))
+            self.engine = engines.select(self.config)
             self._refresh_labels()
-            log.info("Switched engine to %s", name)
+            log.info("Switched engine to %s (%s)", name, self.engine.name)
+            # Pay the model-load cost now rather than on the next dictation.
+            threading.Thread(target=self.engine.warm_up, daemon=True).start()
 
         return switch
 

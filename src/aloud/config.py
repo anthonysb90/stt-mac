@@ -26,8 +26,29 @@ DEFAULTS: Dict[str, Any] = {
         # collide with.
         "key": "right_option",
     },
-    "engine": "whisper_cpp",
+    # "auto" picks the best engine for this machine: Parakeet on Apple
+    # Silicon, faster-whisper on Intel. Name one explicitly to override.
+    "engine": "auto",
     "engines": {
+        "parakeet_mlx": {
+            # Apple Silicon only. Weights are fetched from Hugging Face on
+            # first use and cached under ~/.cache/huggingface.
+            "model": "mlx-community/parakeet-tdt-0.6b-v3",
+            "language": "",
+        },
+        "faster_whisper": {
+            # tiny.en · base.en · small.en · medium.en · large-v3, or a
+            # multilingual variant without the .en suffix.
+            "model": "base.en",
+            "device": "cpu",
+            "compute_type": "int8",
+            "language": "en",
+            # 1 = greedy. Higher is more accurate and markedly slower.
+            "beam_size": 1,
+            "vad_filter": True,
+            # 0 -> let CTranslate2 choose based on core count.
+            "threads": 0,
+        },
         "whisper_cpp": {
             # Leave blank to auto-discover: config -> $PATH -> vendored build.
             "binary": "",

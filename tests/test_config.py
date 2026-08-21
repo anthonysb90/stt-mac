@@ -12,7 +12,7 @@ def test_deep_merge_preserves_untouched_branches():
 
 def test_deep_merge_does_not_mutate_the_defaults():
     _deep_merge(DEFAULTS, {"engine": "mock"})
-    assert DEFAULTS["engine"] == "whisper_cpp"
+    assert DEFAULTS["engine"] == "auto"
 
 
 def test_dotted_get_and_set():

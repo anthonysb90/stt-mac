@@ -1,13 +1,17 @@
-"""Local transcription via the whisper.cpp CLI.
+"""Local transcription via the whisper.cpp CLI — the offline fallback.
 
-whisper.cpp is the one local option that runs well on *both* of the target
-machines: it uses Metal + the Neural Engine on Apple Silicon and falls back to
-AVX/Accelerate on Intel. Apple-Silicon-only stacks (MLX, Parakeet, CoreML-only
-builds) would leave the Intel Mac without an engine.
+Runs on both architectures (Metal + Neural Engine on Apple Silicon, AVX and
+Accelerate on Intel) and, uniquely among the local engines, needs no Python ML
+stack at all: just a binary and a model file. That is what makes it the last
+resort in the `auto` chain — it is the engine that still works on a machine
+where the preferred one has not been installed yet.
 
-We shell out to the `whisper-cli` binary rather than binding libwhisper. That
-keeps the Python side free of a compile step, lets Homebrew or a source build
-supply the binary, and means a crash in the model cannot take the UI down.
+It is a fallback rather than a default because shelling out to a CLI means
+paying a process spawn *and* a full model load on every single dictation. The
+resident engines (`parakeet_mlx`, `faster_whisper`) pay neither.
+
+The trade is deliberate: no compile step, no ML dependency, and a crash inside
+the model cannot take the UI down with it.
 """
 
 from __future__ import annotations
@@ -106,9 +110,9 @@ class WhisperCppEngine(TranscriptionEngine):
         self.binary = find_binary(self.options.get("binary", ""))
         self.model = find_model(self.options.get("model", ""))
         if self.binary is None:
-            return False, "whisper-cli not found. Run scripts/bootstrap.sh."
+            return False, "whisper-cli not found. Run scripts/bootstrap.sh --with-whisper-cpp."
         if self.model is None:
-            return False, f"No ggml-*.bin model in {MODELS_DIR}. Run scripts/fetch_model.sh."
+            return False, f"No ggml-*.bin model in {MODELS_DIR}. Run scripts/fetch_model.sh base.en."
         return True, f"{self.binary.name} + {self.model.name}"
 
     def transcribe(self, wav_path: Path) -> Transcript:

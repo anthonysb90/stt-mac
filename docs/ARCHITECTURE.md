@@ -21,12 +21,22 @@ cloud LLM cleanup pass and the cross-device sync.
 
 ## The two constraints that decided everything
 
-**Two architectures.** An Intel Mac and an M1. That rules out the fastest local
-stacks — MLX, Parakeet-MLX, CoreML/ANE-only builds — because they are Apple
-Silicon only and would leave the Intel machine with no engine at all.
-[whisper.cpp](https://github.com/ggml-org/whisper.cpp) is the one local runtime
-that runs well on both: Metal and the Neural Engine on arm64, AVX and Accelerate
-on x86_64. It is what the engine layer targets first.
+**Two architectures.** An Intel Mac and an M1, with no single runtime that is
+best on both. Rather than settle for a lowest common denominator, the engine
+layer picks per machine and `engine: "auto"` resolves it at startup:
+
+* **Apple Silicon → [Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+  on [MLX](https://github.com/senstella/parakeet-mlx).** Roughly an order of
+  magnitude faster than Whisper large-v3-turbo for English, and its TDT decoder
+  can emit a blank frame instead of being forced to produce a token — so it
+  does not hallucinate text over silence the way Whisper does. MLX has no
+  x86_64 build, so this path is arm64-only by construction.
+* **Intel → [faster-whisper](https://github.com/SYSTRAN/faster-whisper).**
+  CTranslate2's int8 CPU kernels are the best x86_64 option available, and it
+  ships prebuilt wheels so nothing has to be compiled.
+* **Either → [whisper.cpp](https://github.com/ggml-org/whisper.cpp)**, opt-in,
+  as the last resort. It needs no Python ML stack at all, which makes it the
+  thing that still works on a half-configured machine.
 
 **No Xcode.** Worth separating two things that get conflated:
 
@@ -103,30 +113,54 @@ in-place streaming overlay Wispr shows while you talk.
 
 Wispr's claim is under two seconds from key-release to text. Where it goes:
 
-| Stage | Cost | Notes |
+| Stage | Resident engine | whisper.cpp CLI |
 | --- | --- | --- |
-| Stop stream, write WAV | ~5 ms | recording is buffered in RAM |
-| Process spawn | ~50–150 ms | the price of shelling out to the CLI |
-| Model load | 0.1–1.5 s | **the dominant cost**; see below |
-| Inference | 0.2–3 s | scales with model size and audio length |
-| Post-process + paste | ~40 ms | |
+| Stop stream, write WAV | ~5 ms | ~5 ms |
+| Process spawn | — | 50–150 ms |
+| Model load | — *(paid once at startup)* | 0.1–1.5 s **every time** |
+| Inference | 0.05–1 s | 0.2–3 s |
+| Post-process + paste | ~40 ms | ~40 ms |
 
-Model load per invocation is the obvious thing to fix next: a long-lived
-`whisper-server` process, or Python bindings that keep the model resident,
-removes it entirely. The engine interface was drawn so that is a new class in
-`engines/`, not a rewrite.
+The single biggest design consequence of the Parakeet decision is the first two
+rows. `parakeet-mlx` and `faster-whisper` are Python libraries, so the engine
+holds the model **in-process and resident**: `TranscriptionEngine.warm_up()`
+loads it once on a background thread at startup, and every dictation after that
+skips both the process spawn and the model load entirely. whisper.cpp pays both
+on every utterance, which is the real reason it is a fallback rather than the
+default.
+
+The cost is memory — a few GB held for the life of the app — and a warm-up
+window at launch during which the first dictation still blocks on the load.
 
 ## Engine selection per machine
 
 | | M1 | Intel |
 | --- | --- | --- |
-| Acceleration | Metal + Neural Engine | CPU (AVX / Accelerate) |
-| Default model | `small.en` | `base.en` |
-| Expected feel | comfortably faster than real time | usable, noticeably slower |
-| Fallback worth having | — | the `openai` cloud engine |
+| Engine | `parakeet_mlx` | `faster_whisper` |
+| Runtime | MLX (Metal + Neural Engine) | CTranslate2 (CPU, int8/AVX2) |
+| Default model | `mlx-community/parakeet-tdt-0.6b-v3` | `base.en` |
+| Model source | Hugging Face, ~2.4 GB | Hugging Face, ~150 MB |
+| Languages | 25 European | 99 (multilingual variants) |
+| Model residency | in-process | in-process |
+| Extra requirements | Python 3.10+, ffmpeg | — |
+| Escape hatch | `whisper_cpp`, or `openai` | `whisper_cpp`, or `openai` |
 
-`bootstrap.sh` reads `uname -m` and downloads the matching model. Both machines
-share the same config schema, so a config file copied between them works.
+`engines.select()` implements this. It is deliberately asymmetric about
+fallback: `auto` walks the preference list and skips anything that reports
+itself unready, but an **explicitly named** engine is always honoured even when
+broken. Silently substituting a different engine than the one someone asked for
+would be worse than surfacing the error in the menu bar.
+
+Both machines share one config schema, so a config file copied between them
+works — `auto` resolves differently on each.
+
+### Why not one engine everywhere?
+
+It was the original design, and whisper.cpp is genuinely the best *single*
+answer: Metal on arm64, AVX on x86_64, one binary. What it gives up is the
+in-process model residency above, and on Apple Silicon it leaves most of the
+available speed on the table. Since the two machines never have to agree, there
+is no reason to make them.
 
 ## Permissions (TCC)
 
@@ -172,15 +206,19 @@ the fragile part, so it is not the default.
 
 ## Roadmap
 
-1. **Kill the per-dictation model load** — persistent `whisper-server` engine.
-2. **Branding pass** — replace the procedural placeholder mark, add a template
+1. **Streaming warm-up feedback** — the menu bar should show model-loading
+   progress at launch instead of looking idle, and queue a dictation that
+   arrives mid-warm-up rather than blocking on it.
+2. **A resident whisper.cpp** — a long-lived `whisper-server` engine, so the
+   fallback path gets model residency too.
+3. **Branding pass** — replace the procedural placeholder mark, add a template
    menu bar icon set with a proper recording state, and animate the state
    change.
-3. **LLM cleanup step** — an optional post-process stage that fixes grammar and
+4. **LLM cleanup step** — an optional post-process stage that fixes grammar and
    applies tone, matching what Wispr does server-side.
-4. **Real preferences window** — hotkey picker, device picker, dictionary
+5. **Real preferences window** — hotkey picker, device picker, dictionary
    editor.
-5. **Context awareness** — read the frontmost app via `NSWorkspace` and bias the
+6. **Context awareness** — read the frontmost app via `NSWorkspace` and bias the
    prompt or the post-processing per app.
-6. **Learned vocabulary** — mine `history.jsonl` for corrections and feed them
+7. **Learned vocabulary** — mine `history.jsonl` for corrections and feed them
    into the dictionary automatically.

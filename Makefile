@@ -21,6 +21,10 @@ run: ## Run from the terminal (permissions attach to the terminal app)
 doctor: ## Report engine, input device, and permission status
 	$(PYTHON) -m aloud doctor
 
+.PHONY: warm
+warm: ## Load the selected engine, downloading its model if needed
+	$(PYTHON) -m aloud warm
+
 .PHONY: icon
 icon: ## Regenerate the app icon from the procedural source
 	python3 scripts/make_icon_png.py --out assets/Aloud-1024.png --size 1024
