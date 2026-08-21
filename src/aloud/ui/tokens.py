@@ -281,6 +281,15 @@ METER_ATTACK_SECONDS = 0.04
 METER_RELEASE_SECONDS = 0.18
 METER_REFRESH_HZ = 30
 
+#: How long the peak marker sits before it starts sliding back, and how fast it
+#: falls once it does. A clip you glanced away from should still be visible.
+METER_PEAK_HOLD_SECONDS = 1.2
+METER_PEAK_FALL_RATE = 0.6
+#: Below this the meter reads as silent and draws nothing.
+METER_SILENCE_FLOOR = 0.001
+#: The peak marker is only drawn when it is clear of the bar itself.
+METER_PEAK_GAP = 0.02
+
 #: Views must check this before animating; macOS exposes it as
 #: NSWorkspace.accessibilityDisplayShouldReduceMotion.
 REDUCE_MOTION_FALLBACK_DURATION = DURATION["instant"]
@@ -308,8 +317,15 @@ METRIC: Dict[str, float] = {
     "window_width_min": 720,
     "window_height_min": 440,
     "settings_width": 560,
+    "settings_height": 420,
     "meter_height": 6,
     "meter_height_large": 10,
+    "meter_width_min": 200,
+    "meter_readout_width": 56,
+    "state_pill_width": 104,
+    "form_label_width": 96,
+    "field_width_min": 200,
+    "search_width_min": 220,
     "icon_sm": 12,
     "icon_md": 16,
     "icon_lg": 20,
@@ -346,6 +362,37 @@ def ns_font(style: TextStyle):
     if style.mono:
         return AppKit.NSFont.monospacedSystemFontOfSize_weight_(style.size, weight)
     return AppKit.NSFont.systemFontOfSize_weight_(style.size, weight)
+
+
+def ns_shadow(style: Shadow, dark: bool):
+    """Bridge a shadow token to an NSShadow.
+
+    Shadow colour is the one value that cannot be drawn lazily -- AppKit bakes
+    it when the shadow is set -- so it is derived here, and views re-derive it
+    when the appearance changes.
+    """
+    import AppKit
+
+    if style.blur == 0:
+        return None
+    shadow = AppKit.NSShadow.alloc().init()
+    shadow.setShadowOffset_((0, -style.y_offset))
+    shadow.setShadowBlurRadius_(style.blur)
+    shadow.setShadowColor_(
+        AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(0, 0, 0, style.alpha(dark))
+    )
+    return shadow
+
+
+def is_dark(view) -> bool:
+    """Whether a view is currently rendering in a dark appearance."""
+    import AppKit
+
+    names = [AppKit.NSAppearanceNameDarkAqua, AppKit.NSAppearanceNameVibrantDark]
+    match = view.effectiveAppearance().bestMatchFromAppearancesWithNames_(
+        [AppKit.NSAppearanceNameAqua] + names
+    )
+    return match in names
 
 
 def as_dict() -> dict:

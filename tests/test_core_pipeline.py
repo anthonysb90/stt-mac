@@ -1,8 +1,8 @@
 """End-to-end wiring: hotkey edge -> recording -> engine -> delivery.
 
-Runs against the framework stubs in ``tests/stubs.py``, so it exercises the
-real state machine, the real queue, and the real post-processing without a
-microphone, a model, or a menu bar.
+Exercises :class:`aloud.core.DictationController` -- the pipeline with no user
+interface attached -- so the real state machine, queue, dictionary and
+post-processing run without a microphone, a model, or a window.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from aloud.app import AloudApp, State
+from aloud.core import DictationController, State
 from aloud.config import Config
 
 
@@ -73,38 +73,31 @@ def app(tmp_path, monkeypatch):
     config.set("feedback.sounds", False)
     config.set("feedback.notify_on_error", False)
 
-    monkeypatch.setattr("aloud.app.Recorder", lambda **_kwargs: FakeRecorder(tmp_path / "x.wav"))
-    instance = AloudApp(config)
+    monkeypatch.setattr("aloud.core.Recorder", lambda **_kwargs: FakeRecorder(tmp_path / "x.wav"))
+    instance = DictationController(config)
     instance.recorder = FakeRecorder(_silent_wav(tmp_path / "speech.wav"))
     instance.injector = CapturingInjector()
     return instance
 
 
-def test_menu_is_built_with_the_expected_entries(app):
-    titles = [item.title for item in app.menu if hasattr(item, "title")]
-    assert "Idle" in titles
-    assert any(title.startswith("Engine:") for title in titles)
-    assert any(title.startswith("Hotkey:") for title in titles)
-
-
 def test_press_starts_recording_and_release_queues_a_job(app):
-    app.on_hotkey_press()
+    app.begin_recording()
     assert app.state is State.RECORDING
     assert app.recorder.recording
 
-    app.on_hotkey_release()
+    app.finish_recording()
     assert app.state is State.TRANSCRIBING
     assert app._jobs.qsize() == 1
 
 
 def test_second_press_while_recording_is_ignored(app):
-    app.on_hotkey_press()
-    app.on_hotkey_press()
+    app.begin_recording()
+    app.begin_recording()
     assert app.recorder.starts == 1
 
 
 def test_release_without_a_press_does_nothing(app):
-    app.on_hotkey_release()
+    app.finish_recording()
     assert app.state is State.IDLE
     assert app._jobs.qsize() == 0
 
@@ -119,8 +112,8 @@ def test_transcript_is_post_processed_before_delivery(app, tmp_path):
 
 def test_short_recordings_are_discarded(app, tmp_path):
     app.recorder = FakeRecorder(_silent_wav(tmp_path / "blip.wav", seconds=0.1))
-    app.on_hotkey_press()
-    app.on_hotkey_release()
+    app.begin_recording()
+    app.finish_recording()
     assert app.state is State.IDLE
     assert app._jobs.qsize() == 0
 
@@ -190,7 +183,7 @@ def test_entries_count_their_hits(app, tmp_path):
 def test_bias_terms_reach_an_engine_that_supports_them(app, tmp_path):
     app.dictionary.add_term("Supabase")
     transcript = app.engine.transcribe(
-        _silent_wav(tmp_path / "job.wav"), bias_terms=app._bias_terms()
+        _silent_wav(tmp_path / "job.wav"), bias_terms=app.bias_terms()
     )
     assert transcript.meta["bias"] == ["Supabase"]
 
@@ -198,7 +191,7 @@ def test_bias_terms_reach_an_engine_that_supports_them(app, tmp_path):
 def test_no_bias_is_sent_to_an_engine_that_cannot_use_it(app):
     app.dictionary.add_term("Supabase")
     app.engine.supports_bias = False
-    assert app._bias_terms() == []
+    assert app.bias_terms() == []
 
 
 def test_biasing_can_be_turned_off_without_disabling_corrections(app, tmp_path):
@@ -209,7 +202,7 @@ def test_biasing_can_be_turned_off_without_disabling_corrections(app, tmp_path):
     app.dictionary.add_correction("cloud code", "Claude Code")
     app._ruleset = _rebuild(app)
 
-    assert app._bias_terms() == []
+    assert app.bias_terms() == []
     app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
     assert app.injector.delivered == ["Claude Code"]
 
@@ -221,6 +214,128 @@ def test_disabling_the_dictionary_turns_off_both_mechanisms(app, tmp_path):
     app.dictionary.add_correction("cloud code", "Claude Code")
     app._ruleset = _rebuild(app)
 
-    assert app._bias_terms() == []
+    assert app.bias_terms() == []
     app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
     assert app.injector.delivered == ["Cloud code"]
+
+
+# -- cleanup ownership -------------------------------------------------------
+
+
+def test_local_cleanup_runs_when_the_engine_does_not_do_it(app):
+    options = app.postprocess_options()
+    assert options["strip_fillers"] is True
+    assert options["commands"]
+
+
+def test_local_cleanup_stands_down_when_the_engine_handles_it(app):
+    """Deepgram punctuates and strips fillers server-side; doing it twice hurts."""
+    app.engine.handles_cleanup = True
+    options = app.postprocess_options()
+    assert options["strip_fillers"] is False
+    assert options["capitalize_first"] is False
+    assert options["commands"] == {}
+    # Whitespace tidying is cheap and idempotent, so it always runs.
+    assert options["collapse_whitespace"] is True
+
+
+def test_deferring_cleanup_does_not_disable_corrections(app, tmp_path):
+    app.engine.handles_cleanup = True
+    app.config.set("engines.mock.text", "We shipped cloud code today.")
+    app.engine.options["text"] = "We shipped cloud code today."
+    app.dictionary.add_correction("cloud code", "Claude Code")
+    app._ruleset = _rebuild(app)
+
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert app.injector.delivered == ["We shipped Claude Code today."]
+
+
+def test_the_engine_keeps_its_own_capitalisation_when_it_owns_cleanup(app, tmp_path):
+    app.engine.handles_cleanup = True
+    app.config.set("engines.mock.text", "iPhone settings")
+    app.engine.options["text"] = "iPhone settings"
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert app.injector.delivered == ["iPhone settings"]
+
+
+# -- observers ---------------------------------------------------------------
+
+
+class Recorder:
+    def __init__(self):
+        self.states = []
+        self.results = []
+        self.errors = []
+
+    def on_state(self, state):
+        self.states.append(state)
+
+    def on_result(self, dictation):
+        self.results.append(dictation)
+
+    def on_error(self, title, message):
+        self.errors.append((title, message))
+
+
+def test_observers_see_the_state_machine(app, tmp_path):
+    watcher = Recorder()
+    app.add_observer(watcher)
+    app.begin_recording()
+    app.finish_recording()
+    assert State.RECORDING in watcher.states
+    assert State.TRANSCRIBING in watcher.states
+
+
+def test_observers_receive_the_finished_dictation(app, tmp_path):
+    watcher = Recorder()
+    app.add_observer(watcher)
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert len(watcher.results) == 1
+    assert watcher.results[0].text == app.injector.delivered[0]
+    assert app.last is watcher.results[0]
+
+
+def test_an_observer_that_raises_does_not_break_the_pipeline(app, tmp_path):
+    class Broken:
+        def on_result(self, _dictation):
+            raise RuntimeError("boom")
+
+    app.add_observer(Broken())
+    watcher = Recorder()
+    app.add_observer(watcher)
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert len(watcher.results) == 1
+
+
+def test_a_removed_observer_stops_hearing_about_it(app):
+    watcher = Recorder()
+    app.add_observer(watcher)
+    app.remove_observer(watcher)
+    app.begin_recording()
+    assert watcher.states == []
+
+
+def test_toggle_starts_then_stops(app):
+    app.toggle()
+    assert app.state is State.RECORDING
+    app.toggle()
+    assert app.state is State.TRANSCRIBING
+
+
+def test_cancelling_discards_the_recording(app):
+    app.begin_recording()
+    app.cancel_recording()
+    assert app.state is State.IDLE
+    assert app._jobs.qsize() == 0
+
+
+def test_a_dictation_reports_whether_the_dictionary_touched_it(app, tmp_path):
+    app.config.set("engines.mock.text", "open cloud code")
+    app.engine.options["text"] = "open cloud code"
+    app.dictionary.add_correction("cloud code", "Claude Code")
+    app._ruleset = _rebuild(app)
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+
+    assert app.last.was_corrected
+    assert app.last.correction_summary == "cloud code → Claude Code"
+    assert app.last.raw == "open cloud code"

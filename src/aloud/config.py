@@ -66,6 +66,25 @@ DEFAULTS: Dict[str, Any] = {
             "language": "en",
             "timeout": 30,
         },
+        "deepgram": {
+            # Cloud. Uploads your audio, and does the cleanup server-side.
+            "base_url": "https://api.deepgram.com/v1",
+            # Keyterm prompting — how the Dictionary biases this engine —
+            # needs a nova-3 model and a single (non-"multi") language.
+            "model": "nova-3",
+            "language": "en",
+            "api_key_env": "DEEPGRAM_API_KEY",
+            "timeout": 30,
+            # --- cleanup, applied during transcription ---
+            "smart_format": True,     # punctuation, casing, dates, money
+            "punctuate": True,
+            "paragraphs": False,      # dictation is usually one paragraph
+            "filler_words": False,    # drop "uh" and "um"
+            "numerals": True,         # "twenty twenty six" -> 2026
+            "measurements": False,
+            "dictation": True,        # spoken "period" / "new line"
+            "profanity_filter": False,
+        },
         "mock": {"text": "This is mock transcription output."},
     },
     "audio": {
@@ -86,6 +105,8 @@ DEFAULTS: Dict[str, Any] = {
         "restore_delay": 0.8,
         "trailing_space": True,
     },
+    # Local cleanup. Skipped step-by-step when the engine already does this
+    # work itself -- see engines.base.TranscriptionEngine.handles_cleanup.
     "postprocess": {
         "strip_fillers": True,
         "fillers": ["um", "uh", "erm", "hmm", "mhm", "you know"],

@@ -25,6 +25,7 @@ import sys
 from typing import Any, Dict, List, Type
 
 from .base import EngineError, Transcript, TranscriptionEngine
+from .deepgram import DeepgramEngine
 from .faster_whisper import FasterWhisperEngine
 from .mock import MockEngine
 from .openai_api import OpenAIEngine
@@ -39,6 +40,7 @@ REGISTRY: Dict[str, Type[TranscriptionEngine]] = {
         ParakeetMLXEngine,
         FasterWhisperEngine,
         WhisperCppEngine,
+        DeepgramEngine,
         OpenAIEngine,
         MockEngine,
     )

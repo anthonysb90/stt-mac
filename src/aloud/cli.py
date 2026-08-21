@@ -96,6 +96,33 @@ def _cmd_transcribe(config: Config, wav: Path) -> int:
     return 0
 
 
+def _cmd_key(name: str, value: str, forget: bool) -> int:
+    """Store, show, or remove an API key for a cloud engine."""
+    import getpass
+
+    from . import secrets
+
+    if name not in engines.names():
+        print(f"Unknown engine {name!r}. Try: {', '.join(engines.names())}", file=sys.stderr)
+        return 2
+
+    if forget:
+        removed = secrets.forget_key(name)
+        print(f"Removed the stored {name} key." if removed else f"No stored {name} key.")
+        return 0
+
+    if not value:
+        value = getpass.getpass(f"{name} API key (input hidden): ")
+    if not value.strip():
+        print("Nothing entered; no key stored.", file=sys.stderr)
+        return 1
+
+    path = secrets.store_key(name, value)
+    print(f"Stored the {name} key in {path} (readable only by you).")
+    print("The app reads it from there, so this works when launched from the Dock.")
+    return 0
+
+
 def _cmd_history(limit: int) -> int:
     from . import history
 
@@ -115,6 +142,10 @@ def main(argv: list[str] | None = None) -> int:
     transcribe.add_argument("wav", type=Path)
     hist = sub.add_parser("history", help="show recent dictations")
     hist.add_argument("-n", "--limit", type=int, default=10)
+    key = sub.add_parser("key", help="store an API key for a cloud engine")
+    key.add_argument("engine", help="deepgram or openai")
+    key.add_argument("value", nargs="?", default="", help="the key; prompted for if omitted")
+    key.add_argument("--forget", action="store_true", help="remove the stored key")
 
     args = parser.parse_args(argv)
 
@@ -130,8 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_transcribe(config, args.wav)
     if args.command == "history":
         return _cmd_history(args.limit)
+    if args.command == "key":
+        return _cmd_key(args.engine, args.value, args.forget)
 
-    from .app import AloudApp
+    from .app import run
 
-    AloudApp(config).start()
-    return 0
+    return run(config)

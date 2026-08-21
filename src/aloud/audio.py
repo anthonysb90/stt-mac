@@ -11,6 +11,7 @@ audio callback thread, and so numpy is not a dependency at all.
 
 from __future__ import annotations
 
+import array
 import logging
 import tempfile
 import threading
@@ -22,6 +23,7 @@ from typing import List, Optional
 log = logging.getLogger(__name__)
 
 SAMPLE_WIDTH_BYTES = 2  # int16
+INT16_FULL_SCALE = 32768.0
 
 
 class AudioError(RuntimeError):
@@ -48,6 +50,7 @@ class Recorder:
         self._lock = threading.Lock()
         self._started_at: Optional[float] = None
         self._overflowed = False
+        self._level = 0.0
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -93,6 +96,7 @@ class Recorder:
         except Exception:
             log.exception("Error while closing the audio stream")
 
+        self._level = 0.0
         with self._lock:
             chunks, self._chunks = self._chunks, []
 
@@ -109,6 +113,7 @@ class Recorder:
         if not self.recording:
             return
         stream, self._stream = self._stream, None
+        self._level = 0.0
         try:
             stream.stop()
             stream.close()
@@ -121,8 +126,21 @@ class Recorder:
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:
             self._overflowed = True
+        block = bytes(indata)
+        self._level = _peak_of(block)
         with self._lock:
-            self._chunks.append(bytes(indata))
+            self._chunks.append(block)
+
+    @property
+    def level(self) -> float:
+        """Peak amplitude of the most recent block, 0.0 to 1.0.
+
+        Read by the level meter. Peak rather than RMS because the meter's job
+        is to show headroom -- an RMS reading barely moves when you clip.
+        Deliberately not locked: it is a single float written by the audio
+        thread and read by the UI, where a torn read costs one stale frame.
+        """
+        return self._level if self.recording else 0.0
 
     def _write_wav(self, pcm: bytes) -> Path:
         handle = tempfile.NamedTemporaryFile(
@@ -147,6 +165,22 @@ class Recorder:
         if self._started_at is None:
             return 0.0
         return time.monotonic() - self._started_at
+
+
+def _peak_of(pcm: bytes) -> float:
+    """Peak amplitude of one int16 block, normalised to 0.0-1.0.
+
+    Runs on the audio callback thread, so it uses `array` rather than anything
+    that would allocate per sample. A block is ~1k samples and this is a C-level
+    loop, which is comfortably inside the callback's budget.
+    """
+    if len(pcm) < SAMPLE_WIDTH_BYTES:
+        return 0.0
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) - (len(pcm) % SAMPLE_WIDTH_BYTES)])
+    if not samples:
+        return 0.0
+    return min(max(-min(samples), max(samples)) / INT16_FULL_SCALE, 1.0)
 
 
 def wav_duration(path: Path) -> float:

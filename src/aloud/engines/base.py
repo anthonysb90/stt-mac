@@ -34,6 +34,10 @@ class TranscriptionEngine(abc.ABC):
     name: str = "base"
     #: Shown in the UI.
     label: str = "Base"
+    #: Whether the backend already punctuates, capitalises, strips fillers and
+    #: honours spoken punctuation. When true the local post-processing steps
+    #: that would duplicate that work are skipped.
+    handles_cleanup: bool = False
     #: Whether this backend can be primed with vocabulary before decoding.
     #: Whisper-family models take an initial prompt; Parakeet's CTC/TDT decoder
     #: has nowhere to put one. The Dictionary's correction pass is what covers

@@ -44,6 +44,16 @@ dev-app: ## Build the alias .app and launch it
 app: ## Build the standalone, distributable .app
 	./scripts/build_app.sh standalone
 
+.PHONY: install
+install: app ## Build and move Aloud.app into /Applications
+	@if [ -d /Applications/Aloud.app ]; then \
+		echo "==> Replacing the existing /Applications/Aloud.app"; \
+		rm -rf /Applications/Aloud.app; \
+	fi
+	cp -R dist/Aloud.app /Applications/
+	@echo "==> Installed /Applications/Aloud.app"
+	@echo "    Open it from Launchpad or Spotlight, then grant Accessibility access."
+
 .PHONY: test
 test: ## Run the unit tests
 	$(PYTHON) -m pytest -q

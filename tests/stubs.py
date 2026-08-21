@@ -143,62 +143,6 @@ def _make_foundation() -> types.ModuleType:
     )
 
 
-# -- rumps ------------------------------------------------------------------
-
-
-class FakeMenuItem:
-    def __init__(self, title: str, callback: Optional[Callable] = None) -> None:
-        self.title = title
-        self.callback = callback
-        self.children: List["FakeMenuItem"] = []
-
-    def set_callback(self, callback: Optional[Callable]) -> None:
-        self.callback = callback
-
-    def add(self, item: "FakeMenuItem") -> None:
-        self.children.append(item)
-
-
-class FakeApp:
-    def __init__(self, name: str, title: str = "", quit_button: Any = None) -> None:
-        self.name = name
-        self.title = title
-        self.quit_button = quit_button
-        self.menu: List[Any] = []
-        self.ran = False
-
-    def run(self) -> None:
-        self.ran = True
-
-
-def _make_rumps() -> types.ModuleType:
-    alerts: List[tuple] = []
-    notifications: List[tuple] = []
-
-    class FakeTimer:
-        def __init__(self, callback, interval):
-            self.callback = callback
-            self.interval = interval
-
-        def start(self) -> None:
-            pass
-
-        def stop(self) -> None:
-            pass
-
-    return _module(
-        "rumps",
-        App=FakeApp,
-        MenuItem=FakeMenuItem,
-        Timer=FakeTimer,
-        alert=lambda *args, **kwargs: alerts.append((args, kwargs)),
-        notification=lambda **kwargs: notifications.append(kwargs),
-        quit_application=lambda: None,
-        recorded_alerts=alerts,
-        recorded_notifications=notifications,
-    )
-
-
 # -- other frameworks -------------------------------------------------------
 
 
@@ -239,7 +183,6 @@ STUBS: Dict[str, Callable[[], types.ModuleType]] = {
     "Quartz": _make_quartz,
     "AppKit": _make_appkit,
     "Foundation": _make_foundation,
-    "rumps": _make_rumps,
     "ApplicationServices": _make_application_services,
     "AVFoundation": _make_avfoundation,
     "sounddevice": _make_sounddevice,

@@ -28,10 +28,17 @@ PLIST = {
     "CFBundleIdentifier": BUNDLE_ID,
     "CFBundleVersion": VERSION,
     "CFBundleShortVersionString": VERSION,
-    # Menu bar only: no Dock icon, no app switcher entry.
-    "LSUIElement": True,
-    "LSMinimumSystemVersion": "10.15",
+    "CFBundlePackageType": "APPL",
+    "NSPrincipalClass": "NSApplication",
+    # No LSUIElement. Aloud is a regular app: Dock icon, application menu, a
+    # place in the app switcher. The menu bar item is a second surface, set up
+    # in code, not the whole interface.
+    "LSApplicationCategoryType": "public.app-category.productivity",
+    # SF Symbols and NSColor dynamic providers; both are Big Sur and later.
+    "LSMinimumSystemVersion": "11.0",
     "NSHighResolutionCapable": True,
+    "NSSupportsAutomaticTermination": False,
+    "NSSupportsSuddenTermination": False,
     "NSMicrophoneUsageDescription": (
         f"{APP_NAME} records from the microphone while you hold the dictation key."
     ),
@@ -44,7 +51,7 @@ PLIST = {
 OPTIONS = {
     "argv_emulation": False,  # would install its own event tap and fight ours
     "plist": PLIST,
-    "packages": ["aloud", "rumps", "sounddevice", "cffi"],
+    "packages": ["aloud", "sounddevice", "cffi"],
     "includes": ["_cffi_backend"],
     "excludes": ["tkinter", "test", "unittest", "pydoc_data"],
     "semi_standalone": False,

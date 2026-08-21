@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
-import os
 import time
 import urllib.error
 import urllib.request
@@ -23,6 +22,7 @@ from pathlib import Path
 from typing import Sequence, Tuple
 
 from ..corrections import bias_prompt
+from ..secrets import describe_source, read_key
 from .base import EngineError, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
@@ -57,10 +57,14 @@ class OpenAIEngine(TranscriptionEngine):
     # -- contract ----------------------------------------------------------
 
     def check(self) -> Tuple[bool, str]:
-        env_var = self.options.get("api_key_env", "OPENAI_API_KEY")
-        if not os.environ.get(env_var):
-            return False, f"${env_var} is not set in the app's environment."
-        return True, f"{self.options.get('model', 'whisper-1')} via {self._base_url()}"
+        env_var = str(self.options.get("api_key_env", "OPENAI_API_KEY"))
+        if not self._api_key():
+            return False, (
+                f"No API key (${env_var} unset). Run `aloud key openai` to store "
+                "one — a Dock-launched app cannot see your shell environment."
+            )
+        source = describe_source(env_var, self.name)
+        return True, f"{self.options.get('model', 'whisper-1')} via {self._base_url()} · key from {source}"
 
     def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
         ok, detail = self.check()
@@ -115,4 +119,4 @@ class OpenAIEngine(TranscriptionEngine):
         return str(self.options.get("base_url", "https://api.openai.com/v1")).rstrip("/")
 
     def _api_key(self) -> str:
-        return os.environ.get(self.options.get("api_key_env", "OPENAI_API_KEY"), "")
+        return read_key(str(self.options.get("api_key_env", "OPENAI_API_KEY")), self.name)

@@ -1,8 +1,12 @@
-"""Audible and visual cues for state changes.
+"""Audible cues for state changes.
 
-Dictation is eyes-free by nature: the user is looking at the app they are
-dictating into, not at the menu bar. Short system sounds are what actually
-tell them recording started and stopped.
+Dictation is eyes-free by nature: you are looking at the app you are dictating
+into, not at Aloud. Two short system sounds are what actually tell you that
+recording started and stopped, and they remain the fastest feedback in the app
+even now that there is a window and a level meter to look at.
+
+Errors get a sound here and an alert from the app layer; this module stays out
+of the business of presenting them.
 """
 
 from __future__ import annotations
@@ -20,7 +24,6 @@ class Feedback:
         self.start_sound = options.get("start_sound", "Tink")
         self.stop_sound = options.get("stop_sound", "Pop")
         self.error_sound = options.get("error_sound", "Basso")
-        self.notify_on_error = bool(options.get("notify_on_error", True))
 
     def _play(self, name: str) -> None:
         if not self.enabled or not name:
@@ -43,14 +46,5 @@ class Feedback:
     def recording_stopped(self) -> None:
         self._play(self.stop_sound)
 
-    def error(self, title: str, message: str) -> None:
+    def error(self) -> None:
         self._play(self.error_sound)
-        if not self.notify_on_error:
-            return
-        try:
-            import rumps
-
-            rumps.notification(title=title, subtitle="", message=message)
-        except Exception:
-            # Notifications only work from a signed bundle; the log is the fallback.
-            log.debug("Notification suppressed: %s — %s", title, message)

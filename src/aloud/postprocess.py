@@ -57,6 +57,25 @@ def _capitalize_first(text: str) -> str:
     return text
 
 
+#: Steps an engine may already have done for us. Whitespace tidying is not on
+#: the list: it is cheap, idempotent, and guards against trailing spaces from
+#: any source.
+ENGINE_OWNED_STEPS = ("strip_fillers", "capitalize_first", "commands")
+
+
+def defer_to_engine(options: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Turn off the steps a cleanup-capable engine has already performed.
+
+    Running both is not merely wasteful -- our filler list and the engine's
+    disagree at the edges, and applying spoken-punctuation commands to text
+    that already contains real punctuation produces stray line breaks.
+    """
+    narrowed = dict(options or {})
+    for step in ENGINE_OWNED_STEPS:
+        narrowed[step] = False if step != "commands" else {}
+    return narrowed
+
+
 def process(text: str, options: Dict[str, Any] | None = None) -> str:
     """Run the cleanup pipeline. Order matters; each step assumes the last ran."""
     options = options or {}

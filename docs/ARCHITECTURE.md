@@ -72,6 +72,32 @@ under a Developer ID (notarization of Python bundles is genuinely painful), you
 want a real preferences window rather than a JSON file, or you want the
 in-place streaming overlay Wispr shows while you talk.
 
+## The interface layer
+
+Aloud is a regular `NSApplication` — Dock icon, application menu, a window that
+closes without quitting — not the accessory it started as. The menu bar item
+remains, because while you are dictating *into* another app it is the only
+surface you can see, but it is a second surface rather than the whole product.
+
+The split that makes that work:
+
+| | |
+| --- | --- |
+| `core.py` | The pipeline. Imports no AppKit. Announces state through observers. |
+| `app.py` | The seam. Bounces every controller event to the main thread, then calls a view. |
+| `ui/` | Views. Never touch audio, threads, or engines. |
+
+The controller emits from the event tap's run loop and from the transcription
+worker; AppKit is not thread-safe. Putting the hop in exactly one place means no
+view has to remember it, and `core.py` can be tested with no framework stubs at
+all.
+
+**Everything visual comes from `ui/tokens.py`**, and `tests/test_design_rule.py`
+asserts it: no view file may contain a hex colour, construct an `NSColor` or an
+`NSFont`, or size a constraint with a bare number. Colours are *drawn* rather
+than assigned to layers, because a dynamic `NSColor` resolves per appearance
+when it is `set()` inside `drawRect:` and freezes if baked into a `CGColor`.
+
 ## Data flow
 
 ```
@@ -97,6 +123,30 @@ in-place streaming overlay Wispr shows while you talk.
                                         │  injector    │  pasteboard + Cmd-V
                                         └──────────────┘
 ```
+
+### Who owns cleanup
+
+"Cleanup" — punctuation, capitalisation, filler removal, spoken punctuation —
+can happen in two places, and doing it in both is worse than either.
+
+Deepgram does it server-side as part of transcription (`smart_format`,
+`filler_words`, `dictation`, `numerals`). Engines advertise that with
+`handles_cleanup`, and `core.postprocess_options()` then narrows the local pass
+to whitespace tidying only. Running both is not merely redundant: our filler
+list and Deepgram's disagree at the edges, and applying spoken-punctuation
+commands to already-punctuated text leaves stray line breaks.
+
+Worth being precise about what Deepgram can and cannot do here, because it is
+easy to assume otherwise: it has **no text-in / cleaner-text-out endpoint**.
+`/v1/read` (Text Intelligence) analyses text — summary, topics, intents,
+sentiment — and returns analysis, not a rewritten transcript. So transcribing
+locally with Parakeet and sending the text to Deepgram to be tidied is not
+available at any price. Cleanup with Deepgram means transcribing with Deepgram.
+
+Dictionary corrections are the exception that never defers. They run locally on
+every engine, because they are the guaranteed path and because Deepgram's own
+`replace` parameter is a plain find-and-replace with none of the whole-word or
+longest-match guarantees in `corrections.py`.
 
 ### Threading rules
 
@@ -206,18 +256,19 @@ the fragile part, so it is not the default.
 
 ## Roadmap
 
-1. **Streaming warm-up feedback** — the menu bar should show model-loading
+1. **Run it on hardware.** Nothing here has executed on a Mac. The AppKit
+   layer is the part most likely to need a second pass.
+2. **Streaming warm-up feedback** — the window should show model-loading
    progress at launch instead of looking idle, and queue a dictation that
    arrives mid-warm-up rather than blocking on it.
-2. **A resident whisper.cpp** — a long-lived `whisper-server` engine, so the
+3. **A resident whisper.cpp** — a long-lived `whisper-server` engine, so the
    fallback path gets model residency too.
-3. **Branding pass** — replace the procedural placeholder mark, add a template
+4. **Branding pass** — replace the procedural placeholder mark, add a template
    menu bar icon set with a proper recording state, and animate the state
    change.
-4. **LLM cleanup step** — an optional post-process stage that fixes grammar and
-   applies tone, matching what Wispr does server-side.
-5. **Real preferences window** — hotkey picker, device picker, dictionary
-   editor.
+5. **Tone and rewriting** — Deepgram's cleanup handles mechanics; matching what
+   Wispr does with tone would need a rewriting pass over the text, which no ASR
+   API offers. `postprocess.process` is the seam if it is worth adding.
 6. **Context awareness** — read the frontmost app via `NSWorkspace` and bias the
    prompt or the post-processing per app.
 7. **Learned vocabulary** — mine `history.jsonl` for corrections and feed them
