@@ -168,7 +168,31 @@ problem; see [Troubleshooting](#troubleshooting).
 
 ---
 
-## Step 6 — Build the app
+## Step 6 — Make a signing certificate (2 minutes, do it before building)
+
+Optional, but do it *now* rather than later. Without one the app is **ad-hoc
+signed**, which gives it a new identity on every build: macOS treats each
+rebuild as a different app and makes you grant Accessibility again from
+scratch. With one, the permission you grant in step 8 survives every rebuild.
+
+1. Open **Keychain Access** (Spotlight it).
+2. Menu: **Keychain Access → Certificate Assistant → Create a Certificate…**
+3. Name: `Aloud Dev`. Identity Type: **Self Signed Root**. Certificate Type:
+   **Code Signing**. Click **Create**, then **Done**.
+
+Then make your shell use it, so you never have to remember:
+
+```sh
+echo 'export CODESIGN_IDENTITY="Aloud Dev"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Skipping this is fine — everything still works, you just re-grant Accessibility
+after each rebuild.
+
+---
+
+## Step 7 — Build the app
 
 ```sh
 make install
@@ -186,32 +210,7 @@ you want the real thing. Don't keep a dev build in `/Applications` — it breaks
 if you move the checkout.
 </details>
 
-### Make the permissions stick (worth 2 minutes)
-
-By default the app is **ad-hoc signed**, which gives it a new identity on every
-build. macOS treats each rebuild as a different app and makes you grant
-Accessibility again. To avoid that, make yourself a signing certificate once:
-
-1. Open **Keychain Access** (Spotlight it).
-2. Menu: **Keychain Access → Certificate Assistant → Create a Certificate…**
-3. Name: `Aloud Dev`. Identity Type: **Self Signed Root**. Certificate Type:
-   **Code Signing**. Click **Create**, then **Done**.
-
-Then build with it:
-
-```sh
-CODESIGN_IDENTITY="Aloud Dev" make install
-```
-
-Add that to your shell profile if you plan to rebuild often:
-
-```sh
-echo 'export CODESIGN_IDENTITY="Aloud Dev"' >> ~/.zshrc
-```
-
----
-
-## Step 7 — Grant the two permissions
+## Step 8 — Grant the two permissions
 
 Aloud needs both, and macOS will not let an app grant itself either.
 
@@ -241,7 +240,7 @@ have to do steps 2–5 yourself.
 
 ---
 
-## Step 8 — Your first dictation
+## Step 9 — Your first dictation
 
 1. Open any app you can type in — Notes, Mail, a browser.
 2. Click into a text field.
@@ -261,7 +260,7 @@ loading. After that it stays resident.
 
 ---
 
-## Step 9 — Launch at login (optional)
+## Step 10 — Launch at login (optional)
 
 **System Settings → General → Login Items → Open at Login → +** → choose
 **Aloud**.
@@ -312,7 +311,7 @@ make install
 ```
 
 If you set up the signing certificate, permissions carry over. If not, re-do
-step 7's Accessibility part: remove Aloud from the list with **−**, then add it
+step 8's Accessibility part: remove Aloud from the list with **−**, then add it
 again.
 
 ---
@@ -361,7 +360,7 @@ cd ~/Developer/aloud && make doctor
 
 **The hotkey does nothing.**
 Accessibility is not granted, or was granted to a previous build. Menu bar →
-Aloud → check Settings, then redo step 7 — including quitting and reopening.
+Aloud → check Settings, then redo step 8 — including quitting and reopening.
 After an ad-hoc-signed rebuild you must remove Aloud from the Accessibility list
 with **−** and add it again; toggling the switch is not enough.
 

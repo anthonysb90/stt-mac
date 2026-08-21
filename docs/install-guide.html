@@ -1,0 +1,804 @@
+<title>Installing Aloud</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F7F7F9; --panel:#FFFFFF; --sunk:#EFEFF3;
+  --ink:#16161A; --muted:#5A5A69; --faint:#8B8B99;
+  --rule:#E3E3EA; --rule-strong:#D0D0DA;
+  --accent:#4438C9; --accent-wash:rgba(68,56,201,.08);
+  --silicon:#7A2FC4; --silicon-wash:rgba(122,47,196,.10);
+  --intel:#0F6E7A; --intel-wash:rgba(15,110,122,.10);
+  --warn:#945E00; --warn-wash:rgba(148,94,0,.09);
+  --term-bg:#1A1A21; --term-ink:#E8E8F0; --term-dim:#8A8A9C; --term-rule:#2E2E39;
+  --shadow:0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#17171B; --panel:#212127; --sunk:#141418;
+    --ink:#F2F2F6; --muted:#A0A0B0; --faint:#6D6D7B;
+    --rule:#2E2E37; --rule-strong:#3B3B46;
+    --accent:#9C90FF; --accent-wash:rgba(156,144,255,.13);
+    --silicon:#B98BF0; --silicon-wash:rgba(185,139,240,.14);
+    --intel:#4FC3D1; --intel-wash:rgba(79,195,209,.14);
+    --warn:#FFC148; --warn-wash:rgba(255,193,72,.12);
+    --term-bg:#111116; --term-ink:#E8E8F0; --term-dim:#7C7C8C; --term-rule:#26262F;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#17171B; --panel:#212127; --sunk:#141418;
+  --ink:#F2F2F6; --muted:#A0A0B0; --faint:#6D6D7B;
+  --rule:#2E2E37; --rule-strong:#3B3B46;
+  --accent:#9C90FF; --accent-wash:rgba(156,144,255,.13);
+  --silicon:#B98BF0; --silicon-wash:rgba(185,139,240,.14);
+  --intel:#4FC3D1; --intel-wash:rgba(79,195,209,.14);
+  --warn:#FFC148; --warn-wash:rgba(255,193,72,.12);
+  --term-bg:#111116; --term-ink:#E8E8F0; --term-dim:#7C7C8C; --term-rule:#26262F;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",ui-sans-serif,system-ui,sans-serif;
+  font-size:15.5px; line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:900px; margin:0 auto; padding:0 24px 100px;}
+h1,h2,h3,.numeral,.pill,.step-title{font-family:Archivo,-apple-system,system-ui,sans-serif;}
+
+/* ---------- masthead ---------- */
+.masthead{padding:64px 0 32px;}
+.kicker{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--faint); margin:0 0 16px;
+}
+h1{font-size:clamp(36px,6.4vw,58px); font-weight:700; line-height:1.02; letter-spacing:-.025em; margin:0 0 18px; text-wrap:balance;}
+.lede{font-size:17px; color:var(--muted); max-width:60ch; margin:0;}
+
+/* ---------- machine picker ---------- */
+.picker{
+  position:sticky; top:0; z-index:20; margin:32px 0 0;
+  background:color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter:saturate(180%) blur(12px);
+  -webkit-backdrop-filter:saturate(180%) blur(12px);
+  border-bottom:1px solid var(--rule); padding:12px 0;
+  display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+}
+.picker-label{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--faint);
+}
+.choices{display:flex; gap:6px; background:var(--sunk); padding:4px; border-radius:9px;}
+.choice{
+  font:inherit; font-size:13.5px; font-weight:500; border:0; cursor:pointer;
+  padding:6px 14px; border-radius:6px; background:transparent; color:var(--muted);
+  transition:background .12s ease, color .12s ease;
+}
+.choice:hover{color:var(--ink);}
+.choice[aria-pressed="true"]{background:var(--panel); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.08);}
+.choice:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+.progress{
+  margin-left:auto; display:flex; align-items:center; gap:10px;
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--muted);
+  font-variant-numeric:tabular-nums;
+}
+.progress-track{width:78px; height:5px; border-radius:3px; background:var(--rule-strong); overflow:hidden;}
+.progress-fill{height:100%; width:0%; background:var(--accent); transition:width .25s ease;}
+.reset{font:inherit; font-size:12px; background:none; border:0; color:var(--faint); cursor:pointer; padding:2px 4px;}
+.reset:hover{color:var(--accent); text-decoration:underline;}
+
+/* ---------- prerequisites ---------- */
+.prereq{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:40px 0 12px;}
+.prereq > div{background:var(--panel); border:1px solid var(--rule); border-radius:12px; padding:20px 22px;}
+.prereq h3{margin:0 0 12px; font-size:13px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--faint);}
+.prereq ul{margin:0; padding-left:18px;}
+.prereq li{margin:0 0 7px; font-size:14.5px;}
+.prereq li:last-child{margin-bottom:0;}
+.prereq .no li{color:var(--muted); text-decoration:line-through; text-decoration-color:var(--rule-strong);}
+
+/* ---------- steps ---------- */
+.step{
+  position:relative; display:grid; grid-template-columns:56px 1fr; gap:0 20px;
+  padding:34px 0; border-top:1px solid var(--rule);
+}
+.step[hidden]{display:none;}
+.numeral{
+  font-size:30px; font-weight:700; line-height:1; color:var(--rule-strong);
+  letter-spacing:-.03em; font-variant-numeric:tabular-nums; padding-top:2px;
+  transition:color .18s ease;
+}
+.step.done .numeral{color:var(--accent);}
+.step-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 4px;}
+.step-title{font-size:22px; font-weight:600; letter-spacing:-.015em; margin:0;}
+.step.done .step-title{color:var(--muted);}
+.why{color:var(--muted); font-size:14.5px; margin:0 0 18px; max-width:62ch;}
+.step-body > *:last-child{margin-bottom:0;}
+.check{
+  display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--faint);
+  cursor:pointer; user-select:none; margin-top:18px;
+}
+.check input{width:16px; height:16px; accent-color:var(--accent); cursor:pointer;}
+.check:hover{color:var(--muted);}
+
+/* ---------- machine badges + branches ---------- */
+.pill{
+  display:inline-block; font-size:11px; font-weight:600; letter-spacing:.06em;
+  text-transform:uppercase; padding:3px 9px; border-radius:999px; white-space:nowrap;
+}
+.pill.silicon{color:var(--silicon); background:var(--silicon-wash);}
+.pill.intel{color:var(--intel); background:var(--intel-wash);}
+.branch{
+  border-left:2px solid var(--rule-strong); padding:2px 0 2px 18px; margin:0 0 18px;
+}
+.branch.silicon{border-color:var(--silicon);}
+.branch.intel{border-color:var(--intel);}
+.branch-head{
+  display:flex; align-items:center; gap:10px; margin:0 0 10px;
+  font-size:14px; font-weight:600;
+}
+.branch[hidden]{display:none;}
+
+/* ---------- terminal blocks ---------- */
+.cmd{
+  position:relative; background:var(--term-bg); border-radius:10px; margin:0 0 18px;
+  border:1px solid var(--term-rule); overflow:hidden;
+}
+.cmd-bar{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:8px 12px 8px 14px; border-bottom:1px solid var(--term-rule);
+}
+.cmd-where{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--term-dim);
+  letter-spacing:.04em;
+}
+.copy{
+  font:inherit; font-size:11.5px; font-family:"IBM Plex Mono",ui-monospace,monospace;
+  background:transparent; border:1px solid var(--term-rule); color:var(--term-dim);
+  padding:3px 10px; border-radius:5px; cursor:pointer; transition:color .12s ease, border-color .12s ease;
+}
+.copy:hover{color:var(--term-ink); border-color:var(--term-dim);}
+.copy:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+.copy.ok{color:#6FD79A; border-color:#6FD79A;}
+pre{
+  margin:0; padding:14px 16px; overflow-x:auto;
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:13px; line-height:1.75;
+  color:var(--term-ink);
+}
+pre .p{color:var(--term-dim);}
+pre .c{color:var(--term-dim); font-style:italic;}
+code{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.9em;
+  background:var(--sunk); padding:1.5px 5px; border-radius:4px;
+}
+
+/* ---------- callouts ---------- */
+.note{
+  border-radius:10px; padding:14px 18px; margin:0 0 18px; font-size:14.5px;
+  border:1px solid var(--rule); background:var(--panel);
+}
+.note.warn{border-color:color-mix(in srgb, var(--warn) 45%, transparent); background:var(--warn-wash);}
+.note.warn strong{color:var(--warn);}
+.note p{margin:0;}
+.note p + p{margin-top:8px;}
+
+/* ---------- ui path ---------- */
+.path{
+  display:inline-flex; flex-wrap:wrap; align-items:center; gap:6px;
+  font-size:14px; font-weight:500;
+}
+.path span{background:var(--sunk); border:1px solid var(--rule); border-radius:5px; padding:2px 8px;}
+.path b{color:var(--faint); font-weight:400;}
+ol.ui{margin:0 0 18px; padding-left:20px;}
+ol.ui li{margin:0 0 9px;}
+
+/* ---------- tables ---------- */
+.tbl{overflow-x:auto; margin:0 0 18px;}
+table{border-collapse:collapse; width:100%; min-width:400px; font-size:14px;}
+th,td{text-align:left; padding:9px 18px 9px 0; border-bottom:1px solid var(--rule); vertical-align:top;}
+th{font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--faint);}
+td code{background:none; padding:0; color:var(--muted);}
+
+/* ---------- reference sections ---------- */
+.ref{margin-top:56px; padding-top:40px; border-top:2px solid var(--rule-strong);}
+.ref h2{font-size:26px; font-weight:600; letter-spacing:-.02em; margin:0 0 6px;}
+.ref > p{color:var(--muted); margin:0 0 22px; max-width:62ch;}
+details{border-bottom:1px solid var(--rule); padding:14px 0;}
+details summary{cursor:pointer; font-weight:600; font-size:15px; list-style:none;}
+details summary::-webkit-details-marker{display:none;}
+details summary::before{content:"›"; display:inline-block; width:16px; color:var(--faint); transition:transform .15s ease;}
+details[open] summary::before{transform:rotate(90deg);}
+details summary:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:3px;}
+.detail-body{padding:12px 0 4px 16px; color:var(--muted); font-size:14.5px;}
+.detail-body p{margin:0 0 10px;}
+.detail-body .cmd{margin-top:12px;}
+
+footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--rule); color:var(--faint); font-size:13px;}
+footer p{margin:0 0 6px;}
+
+@media (max-width:720px){
+  .wrap{padding:0 18px 80px;}
+  .step{grid-template-columns:1fr; gap:8px;}
+  .numeral{font-size:22px;}
+  .prereq{grid-template-columns:1fr;}
+  .progress{margin-left:0; width:100%;}
+}
+@media (prefers-reduced-motion: reduce){
+  *{transition-duration:.001ms !important; animation-duration:.001ms !important;}
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="kicker">Aloud · push-to-talk dictation</p>
+  <h1>Installing Aloud</h1>
+  <p class="lede">Start to finish on one Mac. Pick your machine below and the steps that don’t apply to it will disappear — everything left on the page is for you.</p>
+</header>
+
+<div class="picker">
+  <span class="picker-label">This Mac is</span>
+  <div class="choices" role="group" aria-label="Which Mac are you installing on">
+    <button class="choice" data-machine="silicon" aria-pressed="false">Apple Silicon</button>
+    <button class="choice" data-machine="intel" aria-pressed="false">Intel</button>
+    <button class="choice" data-machine="both" aria-pressed="true">Show both</button>
+  </div>
+  <div class="progress">
+    <div class="progress-track"><div class="progress-fill" id="fill"></div></div>
+    <span id="progress-text">0 of 10</span>
+    <button class="reset" id="reset" type="button">reset</button>
+  </div>
+</div>
+
+<div class="cmd" style="margin-top:28px">
+  <div class="cmd-bar"><span class="cmd-where">Terminal — not sure which Mac you’re on?</span><button class="copy" type="button">Copy</button></div>
+  <pre><span class="p">$</span> uname -m</pre>
+</div>
+<p style="margin:-6px 0 0; color:var(--muted); font-size:14.5px;"><code>arm64</code> is Apple Silicon. <code>x86_64</code> is Intel.</p>
+
+<div class="prereq">
+  <div>
+    <h3>You need</h3>
+    <ul>
+      <li>macOS 11 (Big Sur) or newer</li>
+      <li>Xcode <strong>Command Line Tools</strong> — ~2 GB, free</li>
+      <li>Homebrew</li>
+      <li>Python 3.10+ <span class="pill silicon">Silicon</span> / 3.9+ <span class="pill intel">Intel</span></li>
+      <li>~3 GB free disk <span class="pill silicon">Silicon</span> / ~1 GB <span class="pill intel">Intel</span></li>
+    </ul>
+  </div>
+  <div class="no">
+    <h3>You don’t need</h3>
+    <ul>
+      <li>Xcode</li>
+      <li>An Apple Developer account</li>
+      <li>Any paid service</li>
+      <li>An internet connection after setup</li>
+    </ul>
+  </div>
+</div>
+
+<div class="note">
+  <p><strong>“Command Line Tools” is not Xcode.</strong> Xcode is the ~10 GB IDE from the App Store — you never need it. The Command Line Tools are a separate free download that ships the compiler and <code>codesign</code>. Every route to a working Mac app needs those, including this one.</p>
+</div>
+
+<section id="steps">
+
+<article class="step" data-step="1">
+  <div class="numeral">01</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Command Line Tools</h2></div>
+    <p class="why">Check whether you already have them. If the first command prints a path, skip to step 2.</p>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> xcode-select -p</pre>
+    </div>
+    <p class="why">If that errors, install them. A system dialog appears — click <strong>Install</strong>, accept the licence, and wait 5–10 minutes.</p>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> xcode-select --install</pre>
+    </div>
+  </div>
+</article>
+
+<article class="step" data-step="2">
+  <div class="numeral">02</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Homebrew</h2></div>
+    <p class="why">Run <code>which brew</code> first. If it prints a path, skip ahead.</p>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"</pre>
+    </div>
+    <div class="branch silicon">
+      <div class="branch-head"><span class="pill silicon">Apple Silicon</span> Read what it prints at the end</div>
+      <p class="why">It asks you to add Homebrew to your <code>PATH</code>. Run these, or <code>brew</code> won’t be found in new terminal windows.</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' &gt;&gt; ~/.zprofile
+<span class="p">$</span> eval "$(/opt/homebrew/bin/brew shellenv)"</pre>
+      </div>
+    </div>
+    <div class="branch intel">
+      <div class="branch-head"><span class="pill intel">Intel</span> Nothing extra</div>
+      <p class="why" style="margin-bottom:0">Homebrew installs to <code>/usr/local</code>, which is already on your <code>PATH</code>.</p>
+    </div>
+  </div>
+</article>
+
+<article class="step" data-step="3">
+  <div class="numeral">03</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Python</h2></div>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> python3 --version</pre>
+    </div>
+    <div class="branch silicon">
+      <div class="branch-head"><span class="pill silicon">Apple Silicon</span> Needs 3.10 or newer</div>
+      <p class="why">Parakeet requires it, and macOS ships 3.9. If you saw <code>3.9.x</code>, install a newer one and note the path — you’ll pass it to the next step.</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> brew install python@3.12
+<span class="p">$</span> $(brew --prefix)/bin/python3.12 --version</pre>
+      </div>
+      <p class="why" style="margin-bottom:0">If <code>python3 --version</code> already said 3.10 or higher, there’s nothing to do here.</p>
+    </div>
+    <div class="branch intel">
+      <div class="branch-head"><span class="pill intel">Intel</span> 3.9 is fine</div>
+      <p class="why" style="margin-bottom:0">Whatever macOS gave you will work. Nothing to do.</p>
+    </div>
+  </div>
+</article>
+
+<article class="step" data-step="4">
+  <div class="numeral">04</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Get the code</h2></div>
+    <p class="why">Put it somewhere permanent — a development build links back to this folder, so moving it later means rebuilding.</p>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> mkdir -p ~/Developer &amp;&amp; cd ~/Developer
+<span class="p">$</span> git clone https://github.com/anthonysb90/stt-mac.git aloud
+<span class="p">$</span> cd aloud
+<span class="p">$</span> git checkout claude/whispr-dictation-app-glvd1v</pre>
+    </div>
+  </div>
+</article>
+
+<article class="step" data-step="5">
+  <div class="numeral">05</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Bootstrap</h2></div>
+    <p class="why">One script: virtualenv, the right engine for this architecture, and the model. The model download is the slow part — let it finish.</p>
+    <div class="branch intel">
+      <div class="branch-head"><span class="pill intel">Intel</span> Run it plain</div>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> ./scripts/bootstrap.sh</pre>
+      </div>
+    </div>
+    <div class="branch silicon">
+      <div class="branch-head"><span class="pill silicon">Apple Silicon</span> Point it at the right Python</div>
+      <p class="why">If step 3 made you install Python 3.12, use the first command. If <code>python3 --version</code> already said 3.10+, the second is enough.</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> PYTHON_BIN=$(brew --prefix)/bin/python3.12 ./scripts/bootstrap.sh
+<span class="c"># …or, if your python3 is already 3.10+:</span>
+<span class="p">$</span> ./scripts/bootstrap.sh</pre>
+      </div>
+    </div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>What it does</th><th>Apple Silicon</th><th>Intel</th></tr></thead>
+        <tbody>
+          <tr><td>Installs the engine</td><td>Parakeet on MLX</td><td>faster-whisper, CPU</td></tr>
+          <tr><td>Installs ffmpeg</td><td>Yes — Parakeet decodes with it</td><td>Not needed</td></tr>
+          <tr><td>Downloads the model</td><td>~2.4 GB</td><td>~150 MB</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="why" style="margin-bottom:0">It refuses early, with the fix, if your Python is too old — so a failure here costs seconds, not a half-finished install.</p>
+  </div>
+</article>
+
+<article class="step" data-step="6">
+  <div class="numeral">06</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Check it worked</h2></div>
+    <p class="why">Do this before building. It’s much easier to fix a missing model now than to wonder later why nothing happens.</p>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> make doctor</pre>
+    </div>
+    <p class="why" style="margin-bottom:0">You want your architecture, <code>ok</code> beside the engine marked <code>(active)</code>, and your microphone listed. A <code>--</code> on the active engine is a problem — the troubleshooting section at the bottom covers the usual causes.</p>
+  </div>
+</article>
+
+<article class="step" data-step="7">
+  <div class="numeral">07</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Make a signing certificate</h2></div>
+    <p class="why">Optional, two minutes, and worth doing <em>before</em> you install rather than after.</p>
+    <div class="note warn">
+      <p><strong>Why bother.</strong> Without one, the app is ad-hoc signed and gets a brand-new identity every time you build it. macOS treats each rebuild as a different app and makes you grant Accessibility again from scratch. With one, the permission you grant in step 9 survives every future rebuild.</p>
+    </div>
+    <ol class="ui">
+      <li>Open <strong>Keychain Access</strong> (Spotlight it).</li>
+      <li>Menu bar: <span class="path"><span>Keychain Access</span><b>→</b><span>Certificate Assistant</span><b>→</b><span>Create a Certificate…</span></span></li>
+      <li>Name it <code>Aloud Dev</code>. Identity Type: <strong>Self Signed Root</strong>. Certificate Type: <strong>Code Signing</strong>.</li>
+      <li>Click <strong>Create</strong>, then <strong>Done</strong>.</li>
+    </ol>
+    <p class="why">Then make your shell use it, so you never have to remember:</p>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> echo 'export CODESIGN_IDENTITY="Aloud Dev"' &gt;&gt; ~/.zshrc
+<span class="p">$</span> source ~/.zshrc</pre>
+    </div>
+    <p class="why" style="margin-bottom:0">Skipping this is fine — everything still works. You’ll just re-grant Accessibility after each rebuild.</p>
+  </div>
+</article>
+
+<article class="step" data-step="8">
+  <div class="numeral">08</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Build and install</h2></div>
+    <p class="why">Builds <code>Aloud.app</code> and copies it into <code>/Applications</code>. It’s a normal Mac app from here on — Dock icon, application menu, a window you can close without quitting.</p>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> make install</pre>
+    </div>
+    <p class="why" style="margin-bottom:0">Open it from Launchpad or Spotlight. It will appear in the Dock and in your menu bar as <code>◌</code>.</p>
+  </div>
+</article>
+
+<article class="step" data-step="9">
+  <div class="numeral">09</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Grant the two permissions</h2></div>
+    <p class="why">macOS will not let an app grant itself either of these. This is the step people get stuck on, so it’s worth doing carefully.</p>
+
+    <div class="branch" style="border-color:var(--accent)">
+      <div class="branch-head">Microphone — it asks you</div>
+      <p class="why">Open Aloud and press <strong>Start Dictation</strong> once. macOS asks — click <strong>Allow</strong>.</p>
+      <p class="why" style="margin-bottom:0">If you miss the prompt: <span class="path"><span>System Settings</span><b>→</b><span>Privacy &amp; Security</span><b>→</b><span>Microphone</span></span> and switch <strong>Aloud</strong> on.</p>
+    </div>
+
+    <div class="branch" style="border-color:var(--warn)">
+      <div class="branch-head">Accessibility — you must add it by hand</div>
+      <p class="why">Aloud needs this to see the hotkey system-wide and to paste into other apps. There is no API for an app to grant itself this.</p>
+      <ol class="ui">
+        <li><span class="path"><span>System Settings</span><b>→</b><span>Privacy &amp; Security</span><b>→</b><span>Accessibility</span></span></li>
+        <li>Click the <strong>+</strong> button.</li>
+        <li>Go to <strong>Applications</strong>, select <strong>Aloud</strong>, click <strong>Open</strong>.</li>
+        <li>Make sure the switch beside it is <strong>on</strong>.</li>
+        <li><strong>Quit Aloud completely (⌘Q) and open it again.</strong></li>
+      </ol>
+      <p class="why" style="margin-bottom:0">That last line is not optional — the permission is only read at launch.</p>
+    </div>
+  </div>
+</article>
+
+<article class="step" data-step="10">
+  <div class="numeral">10</div>
+  <div class="step-body">
+    <div class="step-head"><h2 class="step-title">Dictate something</h2></div>
+    <ol class="ui">
+      <li>Open anything you can type in — Notes, Mail, a browser.</li>
+      <li>Click into a text field.</li>
+      <li><strong>Hold Right Option</strong>, say a sentence, <strong>release</strong>.</li>
+    </ol>
+    <p class="why">The menu bar glyph goes <code>◌</code> → <code>●</code> while recording → <code>◍</code> while transcribing, and your text lands where the cursor is.</p>
+    <div class="note">
+      <p><strong>Why Right Option and not Fn?</strong> Right Option does nothing on its own, so there’s nothing to collide with. Fn is the more Wispr-like choice, but macOS gives it a built-in action — if you want it, first set <span class="path"><span>System Settings</span><b>→</b><span>Keyboard</span><b>→</b><span>Press 🌐 key to</span><b>→</b><span>Do Nothing</span></span>, or it opens the emoji picker every time you dictate. Change the key in Aloud’s Settings (⌘,).</p>
+      <p><strong>The first one is slow.</strong> That’s the model loading, once. Every dictation after it is fast — the model stays in memory.</p>
+    </div>
+  </div>
+</article>
+
+</section>
+
+<section class="ref">
+  <h2>Optional extras</h2>
+  <p>None of this is needed to dictate. Come back to it later.</p>
+
+  <details>
+    <summary>Use Deepgram instead of the local engine</summary>
+    <div class="detail-body">
+      <p>Deepgram does transcription <em>and</em> cleanup in one call — punctuation, capitalisation, filler removal, spoken punctuation (“period”, “new line”), numbers as digits. Its keyterm prompting is also a stronger way to push your Dictionary words at the model than a Whisper prompt.</p>
+      <p>It uploads your audio, which is why it is never chosen automatically.</p>
+      <p>Get a key from deepgram.com (there’s a free tier), then store it:</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> .venv/bin/python -m aloud key deepgram</pre>
+      </div>
+      <p>Then in Aloud’s Settings (⌘,), set <strong>Engine</strong> to <strong>Deepgram (cloud)</strong>. To go back, set it to <strong>Automatic</strong>.</p>
+      <div class="note warn" style="margin-top:14px">
+        <p><strong>Don’t just export the key in <code>.zshrc</code>.</strong> An app launched from the Dock doesn’t inherit your shell environment, so the key would work in Terminal and silently fail in the app. That’s exactly what <code>aloud key</code> exists to avoid — it writes to a file the app can actually read.</p>
+      </div>
+    </div>
+  </details>
+
+  <details>
+    <summary>Start Aloud at login</summary>
+    <div class="detail-body">
+      <p><span class="path"><span>System Settings</span><b>→</b><span>General</span><b>→</b><span>Login Items</span><b>→</b><span>Open at Login</span><b>→</b><span>+</span></span> and choose <strong>Aloud</strong>.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Install the offline fallback engine</summary>
+    <div class="detail-body">
+      <p>whisper.cpp needs no Python ML stack at all, which makes it the thing that still works if the main engine breaks. It’s slower — it reloads the model on every dictation — so it’s opt-in.</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> ./scripts/bootstrap.sh --with-whisper-cpp</pre>
+      </div>
+    </div>
+  </details>
+
+  <details>
+    <summary>Work on the code</summary>
+    <div class="detail-body">
+      <p><code>make dev-app</code> builds a bundle that links back to your checkout, so edits take effect without rebuilding. Use that while changing things, and <code>make install</code> for the real one. Don’t keep a dev build in <code>/Applications</code> — it breaks if you move the checkout.</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> make test      <span class="c"># run the test suite</span>
+<span class="p">$</span> make run       <span class="c"># run from the terminal</span>
+<span class="p">$</span> make warm      <span class="c"># pre-load the model</span></pre>
+      </div>
+    </div>
+  </details>
+</section>
+
+<section class="ref">
+  <h2>When something goes wrong</h2>
+  <p>Run <code>make doctor</code> from <code>~/Developer/aloud</code> first — it answers most of these.</p>
+
+  <details>
+    <summary>The hotkey does nothing</summary>
+    <div class="detail-body">
+      <p>Accessibility isn’t granted, or it was granted to a previous build. Redo step 9 — including the quit and reopen.</p>
+      <p>After an ad-hoc-signed rebuild you must <strong>remove Aloud from the Accessibility list with the − button and add it again</strong>. Toggling the switch off and on is not enough, because macOS sees a different app. Step 7’s certificate prevents this.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Nothing happens at all — no menu bar icon</summary>
+    <div class="detail-body">
+      <p>Check the log, then launch again:</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> tail -f ~/Library/Logs/Aloud/aloud.log</pre>
+      </div>
+    </div>
+  </details>
+
+  <details>
+    <summary>“parakeet-mlx is not installed” <span class="pill silicon">Silicon</span></summary>
+    <div class="detail-body">
+      <p>Almost always Python: it needs 3.10+ and macOS ships 3.9. Redo step 3, then re-run bootstrap with <code>PYTHON_BIN=</code> pointing at the newer one.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>“ffmpeg not found” <span class="pill silicon">Silicon</span></summary>
+    <div class="detail-body">
+      <p>Parakeet decodes audio through it.</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> brew install ffmpeg</pre>
+      </div>
+    </div>
+  </details>
+
+  <details>
+    <summary>It’s slow on every dictation <span class="pill intel">Intel</span></summary>
+    <div class="detail-body">
+      <p>Expected — there’s no GPU path on Intel. In Settings (⌘,), set the model to <code>tiny.en</code>, or switch this Mac to Deepgram.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Text appeared in the wrong app</summary>
+    <div class="detail-body">
+      <p>Aloud pastes into whatever has focus when transcription finishes. Don’t click away while the glyph is <code>◍</code>.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>My clipboard got replaced</summary>
+    <div class="detail-body">
+      <p>It’s put back about a second after pasting. If something else writes to the clipboard inside that window, Aloud leaves it alone rather than overwriting what you copied.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>A word keeps coming out wrong</summary>
+    <div class="detail-body">
+      <p>That’s what the Dictionary is for. Press <strong>⌘2</strong> in Aloud, then <strong>Add Word</strong> for a name it should know, or <strong>Add Correction</strong> for a phrase it always mishears. If an entry looks like it would rewrite an everyday word, the editor warns you before you can save it.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Updating later</summary>
+    <div class="detail-body">
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> git pull
+<span class="p">$</span> ./scripts/bootstrap.sh
+<span class="p">$</span> make install</pre>
+      </div>
+      <p>With the step 7 certificate, permissions carry over. Without it, redo step 9’s Accessibility part.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Uninstalling</summary>
+    <div class="detail-body">
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> rm -rf /Applications/Aloud.app
+<span class="p">$</span> rm -rf ~/Library/Application\ Support/Aloud
+<span class="p">$</span> rm -rf ~/Library/Logs/Aloud ~/Library/Caches/Aloud
+<span class="p">$</span> rm -rf ~/Developer/aloud</pre>
+      </div>
+      <p>Also remove Aloud from Privacy &amp; Security → Accessibility and → Microphone. Models live in <code>~/.cache/huggingface</code>; delete that too if nothing else needs it.</p>
+    </div>
+  </details>
+</section>
+
+<section class="ref">
+  <h2>Where things live</h2>
+  <p>Every one of these is a plain file you can open, read, and edit by hand.</p>
+  <div class="tbl">
+    <table>
+      <tbody>
+        <tr><td>App</td><td><code>/Applications/Aloud.app</code></td></tr>
+        <tr><td>Settings</td><td><code>~/Library/Application Support/Aloud/config.json</code></td></tr>
+        <tr><td>Dictionary</td><td><code>~/Library/Application Support/Aloud/dictionary.json</code></td></tr>
+        <tr><td>History</td><td><code>~/Library/Application Support/Aloud/history.jsonl</code></td></tr>
+        <tr><td>API keys</td><td><code>~/Library/Application Support/Aloud/keys/</code></td></tr>
+        <tr><td>Log</td><td><code>~/Library/Logs/Aloud/aloud.log</code></td></tr>
+        <tr><td>Models</td><td><code>~/.cache/huggingface</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <p>This has not yet been run on a Mac. The AppKit layer is the part most likely to need a fix on first launch — if something misbehaves, the log above is the place to look.</p>
+  <p>Same guide in the repo: <code>docs/INSTALL.md</code></p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var STORE = "aloud-install-v1";
+  var state = { machine: "both", done: {} };
+
+  try {
+    var saved = localStorage.getItem(STORE);
+    if (saved) { state = Object.assign(state, JSON.parse(saved)); }
+  } catch (e) { /* private window, blocked storage — carry on with defaults */ }
+
+  function save(){
+    try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) {}
+  }
+
+  /* ---- machine picker ---- */
+  var choices = Array.prototype.slice.call(document.querySelectorAll(".choice"));
+  function applyMachine(){
+    choices.forEach(function(b){
+      b.setAttribute("aria-pressed", String(b.dataset.machine === state.machine));
+    });
+    ["silicon", "intel"].forEach(function(kind){
+      var show = state.machine === "both" || state.machine === kind;
+      document.querySelectorAll(".branch." + kind).forEach(function(el){ el.hidden = !show; });
+      document.querySelectorAll("details .pill." + kind).forEach(function(pill){
+        var row = pill.closest("details");
+        if (row) { row.hidden = !show; }
+      });
+    });
+  }
+  choices.forEach(function(button){
+    button.addEventListener("click", function(){
+      state.machine = button.dataset.machine;
+      save();
+      applyMachine();
+    });
+  });
+
+  /* ---- per-step checkboxes, so a two-machine install keeps its place ---- */
+  var steps = Array.prototype.slice.call(document.querySelectorAll(".step"));
+  var fill = document.getElementById("fill");
+  var progressText = document.getElementById("progress-text");
+
+  function updateProgress(){
+    var done = steps.filter(function(s){ return s.classList.contains("done"); }).length;
+    fill.style.width = (done / steps.length * 100) + "%";
+    progressText.textContent = done + " of " + steps.length;
+  }
+
+  steps.forEach(function(step){
+    var id = step.dataset.step;
+    var label = document.createElement("label");
+    label.className = "check";
+    var box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = !!state.done[id];
+    label.appendChild(box);
+    label.appendChild(document.createTextNode("Done"));
+    step.querySelector(".step-body").appendChild(label);
+
+    function sync(){
+      step.classList.toggle("done", box.checked);
+      state.done[id] = box.checked;
+      save();
+      updateProgress();
+    }
+    box.addEventListener("change", sync);
+    step.classList.toggle("done", box.checked);
+  });
+  updateProgress();
+
+  document.getElementById("reset").addEventListener("click", function(){
+    state.done = {};
+    save();
+    document.querySelectorAll(".check input").forEach(function(b){ b.checked = false; });
+    steps.forEach(function(s){ s.classList.remove("done"); });
+    updateProgress();
+  });
+
+  /* ---- copy buttons ---- */
+  function commandText(pre){
+    // Strip the "$ " prompts and comment lines — you want the command, not the transcript.
+    return Array.prototype.slice.call(pre.childNodes)
+      .filter(function(node){
+        return !(node.nodeType === 1 && node.classList.contains("c"));
+      })
+      .map(function(node){
+        if (node.nodeType === 1 && node.classList.contains("p")) { return ""; }
+        return node.textContent;
+      })
+      .join("")
+      .split("\n")
+      .map(function(line){ return line.trim(); })
+      .filter(function(line){ return line.length; })
+      .join("\n");
+  }
+
+  document.querySelectorAll(".copy").forEach(function(button){
+    button.addEventListener("click", function(){
+      var pre = button.closest(".cmd").querySelector("pre");
+      var text = commandText(pre);
+      var flash = function(){
+        button.textContent = "Copied";
+        button.classList.add("ok");
+        setTimeout(function(){ button.textContent = "Copy"; button.classList.remove("ok"); }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(flash, function(){ selectFallback(pre, button); });
+      } else {
+        selectFallback(pre, button);
+      }
+    });
+  });
+
+  function selectFallback(pre, button){
+    // Clipboard API can be blocked in a sandboxed frame; select the text so ⌘C works.
+    var range = document.createRange();
+    range.selectNodeContents(pre);
+    var selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    button.textContent = "Press ⌘C";
+    setTimeout(function(){ button.textContent = "Copy"; }, 2200);
+  }
+
+  applyMachine();
+})();
+</script>

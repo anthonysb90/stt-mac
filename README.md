@@ -22,7 +22,9 @@ nothing leaves it unless you switch to the cloud engine on purpose.
 ## Install
 
 Full step-by-step instructions for each machine, including the permissions
-macOS makes you grant by hand: **[docs/INSTALL.md](docs/INSTALL.md)**.
+macOS makes you grant by hand: **[docs/INSTALL.md](docs/INSTALL.md)**, or the
+same guide as a page you can follow on the machine itself —
+`docs/install-guide.html`.
 
 The short version:
 
