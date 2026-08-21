@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Tuple
+from typing import Sequence, Tuple
 
 from .base import EngineError, Transcript, TranscriptionEngine
 
@@ -43,6 +43,9 @@ def supported() -> bool:
 class ParakeetMLXEngine(TranscriptionEngine):
     name = "parakeet_mlx"
     label = "Parakeet · MLX (Apple Silicon)"
+    #: Parakeet's TDT decoder has no prompt to condition on, so Dictionary
+    #: biasing is a no-op here and the correction pass does all the work.
+    supports_bias = False
 
     def __init__(self, options=None) -> None:
         super().__init__(options)
@@ -74,7 +77,8 @@ class ParakeetMLXEngine(TranscriptionEngine):
         except EngineError as exc:
             log.warning("Parakeet warm-up failed: %s", exc)
 
-    def transcribe(self, wav_path: Path) -> Transcript:
+    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+        del bias_terms  # unsupported by this decoder; see `supports_bias`
         model = self._load()
         started = time.monotonic()
         try:

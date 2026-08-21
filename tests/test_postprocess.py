@@ -5,7 +5,6 @@ OPTIONS = {
     "fillers": ["um", "uh", "you know"],
     "capitalize_first": True,
     "collapse_whitespace": True,
-    "dictionary": {"claud": "Claude", "wisper": "Whisper"},
     "commands": {"new line": "\n", "new paragraph": "\n\n"},
 }
 
@@ -19,8 +18,10 @@ def test_leaves_filler_substrings_alone():
     assert process("the umbrella", OPTIONS) == "The umbrella"
 
 
-def test_applies_dictionary_case_insensitively():
-    assert process("ask Claud about wisper", OPTIONS) == "Ask Claude about Whisper"
+def test_vocabulary_is_not_this_layers_job():
+    """Corrections live in aloud.corrections and run before this stage."""
+    assert "dictionary" not in OPTIONS
+    assert process("ask Claud about wisper", OPTIONS) == "Ask Claud about wisper"
 
 
 def test_expands_spoken_commands():

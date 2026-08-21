@@ -1,0 +1,583 @@
+<title>Aloud Design Tokens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* ---------------------------------------------------------------------------
+   The page is painted with the tokens it documents. Light palette on :root.
+   --------------------------------------------------------------------------- */
+:root{
+  --ground:#F6F6F9; --panel:#FFFFFF; --inset:#EDEDF2;
+  --ink:#17171C; --muted:#585868; --faint:#8A8A9B;
+  --rule:#E4E4EC; --rule-strong:#D3D3DE;
+  --accent:#4438C9; --accent-soft:rgba(76,58,224,.10);
+  --pass:#177340; --fail:#C52328;
+  --shadow:0 1px 3px rgba(0,0,0,.08);
+  --checker:#DEDEE6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#1B1B20; --panel:#25252B; --inset:#161619;
+    --ink:#F2F2F6; --muted:#A2A2B2; --faint:#6E6E7E;
+    --rule:#33333C; --rule-strong:#3E3E49;
+    --accent:#9C90FF; --accent-soft:rgba(138,123,255,.16);
+    --pass:#42CC85; --fail:#FF6167;
+    --shadow:0 1px 3px rgba(0,0,0,.34);
+    --checker:#33333C;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#1B1B20; --panel:#25252B; --inset:#161619;
+  --ink:#F2F2F6; --muted:#A2A2B2; --faint:#6E6E7E;
+  --rule:#33333C; --rule-strong:#3E3E49;
+  --accent:#9C90FF; --accent-soft:rgba(138,123,255,.16);
+  --pass:#42CC85; --fail:#FF6167;
+  --shadow:0 1px 3px rgba(0,0,0,.34);
+  --checker:#33333C;
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",ui-sans-serif,system-ui,sans-serif;
+  font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:980px; margin:0 auto; padding:0 28px 96px;}
+
+/* ---- masthead ---- */
+.masthead{padding:72px 0 40px; border-bottom:1px solid var(--rule);}
+.eyebrow{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--faint); margin:0 0 18px;
+}
+h1{
+  font-family:Newsreader,Georgia,serif; font-weight:500; font-size:clamp(38px,6vw,60px);
+  line-height:1.02; letter-spacing:-.015em; margin:0 0 20px; text-wrap:balance;
+}
+h1 em{font-style:italic; color:var(--accent);}
+.lede{max-width:62ch; font-size:17px; color:var(--muted); margin:0;}
+.lede strong{color:var(--ink); font-weight:600;}
+.facts{
+  display:flex; flex-wrap:wrap; gap:0 32px; margin:32px 0 0; padding:0; list-style:none;
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--faint);
+}
+.facts b{color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums;}
+
+/* ---- sections ---- */
+section{padding:56px 0 0; border-top:1px solid var(--rule); margin-top:56px;}
+section:first-of-type{border-top:none; margin-top:0;}
+h2{
+  font-family:Newsreader,Georgia,serif; font-weight:500; font-size:30px; line-height:1.1;
+  letter-spacing:-.01em; margin:0 0 8px;
+}
+.section-note{max-width:60ch; color:var(--muted); margin:0 0 32px; font-size:14px;}
+
+/* ---- the plate: name+note on the left, the real thing on the right ---- */
+.plate{
+  display:grid; grid-template-columns:minmax(190px,240px) 1fr; gap:28px;
+  padding:20px 0; border-top:1px solid var(--rule); align-items:start;
+}
+.plate:first-of-type{border-top:1px solid var(--rule-strong);}
+.plate-name{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; font-weight:500;
+  color:var(--ink); word-break:break-word; margin:0 0 6px;
+}
+.plate-note{font-size:12.5px; color:var(--muted); margin:0; line-height:1.45;}
+.plate-body{min-width:0;}
+
+.group{margin:0 0 44px;}
+.group:last-child{margin-bottom:0;}
+.group-head{
+  display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin:0 0 6px;
+}
+.group-head h3{
+  font-size:13px; font-weight:600; letter-spacing:.02em; margin:0; color:var(--ink);
+}
+.group-note{font-size:12.5px; color:var(--muted); margin:0 0 4px; max-width:64ch;}
+
+/* ---- colour chips: both appearances, always, because they are data ---- */
+.chips{display:flex; gap:0; border:1px solid var(--rule); border-radius:6px; overflow:hidden; width:max-content; max-width:100%;}
+.chip{width:74px; height:52px; position:relative;
+  background-image:linear-gradient(45deg,var(--checker) 25%,transparent 25%,transparent 75%,var(--checker) 75%),
+                   linear-gradient(45deg,var(--checker) 25%,transparent 25%,transparent 75%,var(--checker) 75%);
+  background-size:10px 10px; background-position:0 0,5px 5px;}
+.chip i{position:absolute; inset:0; display:block;}
+.chip + .chip{border-left:1px solid var(--rule);}
+.swatch-meta{
+  display:flex; gap:10px 18px; flex-wrap:wrap; margin:10px 0 0;
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--muted);
+}
+.swatch-meta b{color:var(--ink); font-weight:500;}
+.ratio{
+  display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:999px;
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500;
+  border:1px solid currentColor; font-variant-numeric:tabular-nums;
+}
+.ratio.pass{color:var(--pass);} .ratio.fail{color:var(--fail);} .ratio.na{color:var(--faint);}
+
+/* ---- type specimens ---- */
+.specimen{color:var(--ink); margin:0; overflow-wrap:anywhere;}
+.spec-meta{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--faint);
+  margin:8px 0 0; font-variant-numeric:tabular-nums;
+}
+
+/* ---- scales ---- */
+.bar{background:var(--accent); border-radius:2px; height:14px;}
+.scale-row{display:flex; align-items:center; gap:14px; padding:7px 0;}
+.scale-key{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; width:62px; flex:none;
+  color:var(--ink); font-weight:500;
+}
+.scale-val{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--faint);
+  width:44px; flex:none; text-align:right; font-variant-numeric:tabular-nums;
+}
+.tiles{display:flex; flex-wrap:wrap; gap:22px;}
+.tile{text-align:center;}
+.tile .box{
+  width:84px; height:84px; background:var(--accent-soft);
+  border:1px solid var(--accent); display:block;
+}
+.tile figcaption{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--muted);
+  margin-top:8px; font-variant-numeric:tabular-nums;
+}
+.rules-demo{display:flex; flex-direction:column; gap:20px;}
+.rule-line{background:var(--ink);}
+
+.elevations{display:flex; flex-wrap:wrap; gap:26px;}
+.elevation{
+  width:132px; height:88px; background:var(--panel); border-radius:10px;
+  display:flex; align-items:flex-end; padding:12px;
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--muted);
+  border:1px solid var(--rule);
+}
+
+/* ---- motion ---- */
+.motion-track{
+  position:relative; height:26px; background:var(--inset); border-radius:4px; overflow:hidden;
+}
+.motion-dot{
+  position:absolute; top:5px; left:4px; width:16px; height:16px; border-radius:50%;
+  background:var(--accent); transform:translateX(0);
+}
+button.replay{
+  font:inherit; font-size:12.5px; padding:6px 14px; border-radius:6px;
+  border:1px solid var(--rule-strong); background:var(--panel); color:var(--ink); cursor:pointer;
+  transition:border-color .12s cubic-bezier(.2,0,0,1), background .12s cubic-bezier(.2,0,0,1);
+}
+button.replay:hover{border-color:var(--accent); background:var(--accent-soft);}
+button.replay:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+
+.meter-demo{display:flex; align-items:center; gap:16px; flex-wrap:wrap;}
+canvas#meter{
+  width:100%; max-width:420px; height:44px; background:var(--inset); border-radius:6px; display:block;
+}
+.meter-legend{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--muted);
+  line-height:1.7;
+}
+
+/* ---- tables ---- */
+.table-scroll{overflow-x:auto; margin:0; -webkit-overflow-scrolling:touch;}
+table{border-collapse:collapse; width:100%; min-width:420px; font-size:13px;}
+th,td{text-align:left; padding:9px 16px 9px 0; border-bottom:1px solid var(--rule);}
+th{
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10.5px; font-weight:500;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+}
+td.key{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px;}
+td.num{font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; color:var(--muted);}
+
+/* ---- callout ---- */
+.rule-box{
+  border-left:2px solid var(--accent); padding:4px 0 4px 22px; margin:36px 0 0; max-width:64ch;
+}
+.rule-box p{margin:0; font-size:16px;}
+.rule-box p + p{margin-top:10px; font-size:14px; color:var(--muted);}
+
+footer{
+  margin-top:72px; padding-top:28px; border-top:1px solid var(--rule);
+  font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--faint);
+}
+footer a{color:var(--accent);}
+footer p{margin:0 0 6px;}
+
+@media (max-width:760px){
+  .wrap{padding:0 20px 72px;}
+  .plate{grid-template-columns:1fr; gap:14px; padding:18px 0;}
+  .masthead{padding:48px 0 32px;}
+}
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.001ms !important; transition-duration:.001ms !important;}
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Aloud · interface layer</p>
+  <h1>Design tokens, <em>before</em> the views</h1>
+  <p class="lede">Every view in Aloud pulls from this file. <strong>No component defines its own colour, size, radius, duration, or spacing value.</strong> If a view needs something the system does not have, the token is added here first.</p>
+  <ul class="facts">
+    <li><b id="fact-color">—</b> colour tokens</li>
+    <li><b id="fact-type">—</b> type steps</li>
+    <li><b id="fact-space">—</b> spacing steps</li>
+    <li><b>2</b> appearances, defined together</li>
+  </ul>
+  <div class="rule-box">
+    <p>An AppKit app has no stylesheet. Without a deliberate system the values scatter across a dozen controllers and light/dark parity rots within a week.</p>
+    <p>Naming them once makes the design reviewable as a design, and makes “tighten every gap by 2pt” a one-line change instead of an archaeology project.</p>
+  </div>
+</header>
+
+<section id="colour">
+  <h2>Colour</h2>
+  <p class="section-note">Semantic, not literal. A view asks for <code>TEXT_SECONDARY</code>, never <code>#585868</code>. Each token carries both appearances, so switching is automatic and cannot be forgotten. Chips below show light on the left, dark on the right — always both, regardless of how you are reading this page.</p>
+  <div id="colour-groups"></div>
+</section>
+
+<section id="type">
+  <h2>Type</h2>
+  <p class="section-note">macOS-native and short. 13pt is the system control size; everything else is a ratio away from it. A scale with eleven steps is a scale nobody follows. Specimens below are set in the real system face at the real size.</p>
+  <div id="type-plates"></div>
+</section>
+
+<section id="space">
+  <h2>Spacing</h2>
+  <p class="section-note">A 4pt grid, with 2pt and 6pt half-steps below 8 for optical adjustment inside controls. Bars are drawn at true width.</p>
+  <div class="plate">
+    <div><p class="plate-name">SPACE</p><p class="plate-note">The raw scale. Every margin and gap in the app is one of these numbers.</p></div>
+    <div class="plate-body" id="space-scale"></div>
+  </div>
+  <div class="plate">
+    <div><p class="plate-name">INSET</p><p class="plate-note">Compositions of the scale, so “the padding inside a card” is one decision made once. A component may not invent its own.</p></div>
+    <div class="plate-body" id="inset-scale"></div>
+  </div>
+</section>
+
+<section id="radius">
+  <h2>Radius &amp; border</h2>
+  <p class="section-note">Drawn at true size. <code>md</code> is 6 because that is the macOS control radius — matching it is what keeps buttons from looking foreign.</p>
+  <div class="plate">
+    <div><p class="plate-name">RADIUS</p><p class="plate-note">sm for chips and the meter, md for controls, lg for cards and rows, xl for sheets and the window.</p></div>
+    <div class="plate-body"><div class="tiles" id="radius-tiles"></div></div>
+  </div>
+  <div class="plate">
+    <div><p class="plate-name">BORDER</p><p class="plate-note">Weights in points. The focus ring is drawn outside the control bounds.</p></div>
+    <div class="plate-body"><div class="rules-demo" id="border-rules"></div></div>
+  </div>
+</section>
+
+<section id="shadow">
+  <h2>Shadow</h2>
+  <p class="section-note">Three elevations plus flat, and most things are flat. Dark mode carries a heavier alpha at every level, because a shadow that reads on white is invisible on <code>#1B1B20</code>.</p>
+  <div class="plate">
+    <div><p class="plate-name">SHADOW</p><p class="plate-note">Offset and blur in points; alpha differs per appearance. What you see below is the value for the appearance you are reading in.</p></div>
+    <div class="plate-body"><div class="elevations" id="elevations"></div></div>
+  </div>
+</section>
+
+<section id="motion">
+  <h2>Motion</h2>
+  <p class="section-note">Nothing on a desktop app should exceed <code>slow</code>. Views check <code>accessibilityDisplayShouldReduceMotion</code> and fall back to instant.</p>
+  <div class="plate">
+    <div>
+      <p class="plate-name">DURATION · EASING</p>
+      <p class="plate-note">Each track runs its real duration on the standard curve. Watch them side by side — the difference between 120ms and 200ms is the whole argument for having a scale.</p>
+      <p style="margin:14px 0 0"><button class="replay" id="replay">Play again</button></p>
+    </div>
+    <div class="plate-body" id="motion-tracks"></div>
+  </div>
+  <div class="plate">
+    <div>
+      <p class="plate-name">METER_ATTACK · METER_RELEASE</p>
+      <p class="plate-note">The level meter gets its own ballistics, and they are asymmetric on purpose: it has to jump to a new peak immediately to feel connected to your voice, but fall slowly or it strobes.</p>
+    </div>
+    <div class="plate-body">
+      <div class="meter-demo">
+        <canvas id="meter" width="840" height="88" aria-label="Level meter running the real attack and release timings"></canvas>
+        <p class="meter-legend" id="meter-legend"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="metrics">
+  <h2>Metrics</h2>
+  <p class="section-note">Sizes that are neither spacing nor type but still must not be invented per view — control and row heights, sidebar and window geometry, icon sizes.</p>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th scope="col">Token</th><th scope="col">Points</th><th scope="col">Token</th><th scope="col">Points</th></tr></thead>
+      <tbody id="metric-rows"></tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <p>Canonical definition: <code>src/aloud/ui/tokens.py</code> · reasoning: <code>docs/DESIGN.md</code> · enforced by <code>tests/test_tokens.py</code></p>
+  <p>Contrast figures on this page are computed live from the token values, not transcribed.</p>
+</footer>
+
+</div>
+
+<script id="token-data" type="application/json">{"colorGroups": [{"title": "Brand", "note": "The indigo\u2192violet of the app mark. Dark variants are lifted and desaturated \u2014 the same indigo on a dark surface reads muddy.", "role": "fill", "tokens": [{"name": "BRAND_PRIMARY", "light": "#4C3AE0", "dark": "#8A7BFF", "alpha": 1.0, "description": "Primary action, focus, active state", "aa": false, "dim": false, "exempt": ""}, {"name": "BRAND_SECONDARY", "light": "#8B3FD9", "dark": "#B98BF0", "alpha": 1.0, "description": "Gradient partner, transcribing state", "aa": false, "dim": false, "exempt": ""}, {"name": "BRAND_GRADIENT_START", "light": "#4C3AE0", "dark": "#6E5CF5", "alpha": 1.0, "description": "Mark and hero gradient, top", "aa": false, "dim": false, "exempt": ""}, {"name": "BRAND_GRADIENT_END", "light": "#8B3FD9", "dark": "#A96BE8", "alpha": 1.0, "description": "Mark and hero gradient, bottom", "aa": false, "dim": false, "exempt": ""}]}, {"title": "Surface", "note": "Four levels only. Past four the hierarchy stops reading.", "role": "surface", "tokens": [{"name": "BG_WINDOW", "light": "#F6F6F9", "dark": "#1B1B20", "alpha": 1.0, "description": "Window background, behind everything", "aa": false, "dim": false, "exempt": ""}, {"name": "BG_SURFACE", "light": "#FFFFFF", "dark": "#25252B", "alpha": 1.0, "description": "Cards, list rows, panels", "aa": false, "dim": false, "exempt": ""}, {"name": "BG_RAISED", "light": "#FFFFFF", "dark": "#2E2E36", "alpha": 1.0, "description": "Popovers, menus, hovered rows", "aa": false, "dim": false, "exempt": ""}, {"name": "BG_INSET", "light": "#EDEDF2", "dark": "#161619", "alpha": 1.0, "description": "Search fields, code blocks, wells", "aa": false, "dim": false, "exempt": ""}]}, {"title": "State fills", "note": "Alpha over the brand or a neutral, so they survive a palette change.", "role": "fill", "tokens": [{"name": "BG_SELECTION", "light": "#4C3AE0", "dark": "#8A7BFF", "alpha": 0.14, "description": "Selected row fill", "aa": false, "dim": false, "exempt": ""}, {"name": "BG_HOVER", "light": "#000000", "dark": "#FFFFFF", "alpha": 0.04, "description": "Hover wash, appearance-neutral", "aa": false, "dim": false, "exempt": ""}, {"name": "BG_SCRIM", "light": "#000000", "dark": "#000000", "alpha": 0.32, "description": "Behind modal sheets", "aa": false, "dim": false, "exempt": ""}]}, {"title": "Content", "note": "Three weights is the whole hierarchy: content, labels, and text that is present but not to be read.", "role": "text", "tokens": [{"name": "TEXT_PRIMARY", "light": "#17171C", "dark": "#F2F2F6", "alpha": 1.0, "description": "Transcripts, entry text, titles", "aa": true, "dim": false, "exempt": ""}, {"name": "TEXT_SECONDARY", "light": "#585868", "dark": "#A2A2B2", "alpha": 1.0, "description": "Labels, timestamps, counts", "aa": true, "dim": false, "exempt": ""}, {"name": "TEXT_TERTIARY", "light": "#8A8A9B", "dark": "#6E6E7E", "alpha": 1.0, "description": "Placeholders, disabled, hints", "aa": false, "dim": true, "exempt": ""}, {"name": "TEXT_ACCENT", "light": "#4438C9", "dark": "#9C90FF", "alpha": 1.0, "description": "Links and accented labels", "aa": true, "dim": false, "exempt": ""}, {"name": "TEXT_ON_ACCENT", "light": "#FFFFFF", "dark": "#FFFFFF", "alpha": 1.0, "description": "Text on a brand-filled surface", "aa": false, "dim": false, "exempt": "on a brand fill"}, {"name": "TEXT_INVERSE", "light": "#FFFFFF", "dark": "#17171C", "alpha": 1.0, "description": "Text on an inverted surface", "aa": false, "dim": false, "exempt": "on an inverted surface"}]}, {"title": "Lines", "note": "Deliberately faint. What matters is that the three weights stay distinguishable from each other.", "role": "line", "tokens": [{"name": "BORDER_SUBTLE", "light": "#E4E4EC", "dark": "#33333C", "alpha": 1.0, "description": "Row separators, card edges", "aa": false, "dim": false, "exempt": ""}, {"name": "BORDER_DEFAULT", "light": "#D3D3DE", "dark": "#3E3E49", "alpha": 1.0, "description": "Field and control outlines", "aa": false, "dim": false, "exempt": ""}, {"name": "BORDER_STRONG", "light": "#B4B4C4", "dark": "#5C5C6B", "alpha": 1.0, "description": "Emphasised outlines, dividers", "aa": false, "dim": false, "exempt": ""}, {"name": "BORDER_FOCUS", "light": "#4C3AE0", "dark": "#8A7BFF", "alpha": 1.0, "description": "Focus ring", "aa": false, "dim": false, "exempt": ""}]}, {"title": "Status", "note": "These render as text, so the light values are tuned to clear 4.5:1 rather than to be maximally saturated.", "role": "text", "tokens": [{"name": "STATUS_IDLE", "light": "#8A8A9B", "dark": "#6E6E7E", "alpha": 1.0, "description": "Not recording", "aa": false, "dim": true, "exempt": ""}, {"name": "STATUS_RECORDING", "light": "#C52328", "dark": "#FF6167", "alpha": 1.0, "description": "Microphone is live", "aa": true, "dim": false, "exempt": ""}, {"name": "STATUS_TRANSCRIBING", "light": "#7A2FC4", "dark": "#B98BF0", "alpha": 1.0, "description": "Model is working", "aa": true, "dim": false, "exempt": ""}, {"name": "STATUS_SUCCESS", "light": "#177340", "dark": "#42CC85", "alpha": 1.0, "description": "Delivered, saved, valid", "aa": true, "dim": false, "exempt": ""}, {"name": "STATUS_WARNING", "light": "#945E00", "dark": "#FFC148", "alpha": 1.0, "description": "Risky dictionary entry", "aa": true, "dim": false, "exempt": ""}, {"name": "STATUS_ERROR", "light": "#C52328", "dark": "#FF6167", "alpha": 1.0, "description": "Failure that needs attention", "aa": true, "dim": false, "exempt": ""}, {"name": "STATUS_RECORDING_FILL", "light": "#E0393E", "dark": "#FF6167", "alpha": 1.0, "description": "Live-microphone dot and meter", "aa": false, "dim": false, "exempt": "fill only \u2014 never text"}]}, {"title": "Level meter", "note": "A three-stop ramp. A monochrome bar cannot show headroom, which is the only reason to have a meter.", "role": "fill", "tokens": [{"name": "METER_TRACK", "light": "#E4E4EC", "dark": "#2E2E36", "alpha": 1.0, "description": "Unfilled meter", "aa": false, "dim": false, "exempt": ""}, {"name": "METER_LOW", "light": "#42A05F", "dark": "#4FBF72", "alpha": 1.0, "description": "Healthy speaking level", "aa": false, "dim": false, "exempt": ""}, {"name": "METER_MID", "light": "#C79014", "dark": "#FFC148", "alpha": 1.0, "description": "Loud but usable", "aa": false, "dim": false, "exempt": ""}, {"name": "METER_PEAK", "light": "#E0393E", "dark": "#FF6167", "alpha": 1.0, "description": "Clipping", "aa": false, "dim": false, "exempt": ""}]}, {"title": "Highlight", "note": "Washes, not borders \u2014 a transcript with six corrections must stay readable.", "role": "fill", "tokens": [{"name": "HIGHLIGHT_CORRECTION", "light": "#B87503", "dark": "#FFC148", "alpha": 0.2, "description": "Corrected span", "aa": false, "dim": false, "exempt": ""}, {"name": "HIGHLIGHT_MATCH", "light": "#4C3AE0", "dark": "#8A7BFF", "alpha": 0.22, "description": "Search hit", "aa": false, "dim": false, "exempt": ""}]}], "type": [{"name": "TYPE_DISPLAY", "specimen": "Nothing dictated yet", "size": 28, "weight": "semibold", "line_height": 1.15, "tracking": -0.4, "mono": false, "uppercase": false, "description": "Empty-state headline"}, {"name": "TYPE_TITLE_1", "specimen": "Dictionary", "size": 22, "weight": "semibold", "line_height": 1.2, "tracking": -0.3, "mono": false, "uppercase": false, "description": "Window / section title"}, {"name": "TYPE_TITLE_2", "specimen": "Corrections", "size": 17, "weight": "semibold", "line_height": 1.25, "tracking": -0.2, "mono": false, "uppercase": false, "description": "Panel heading"}, {"name": "TYPE_TITLE_3", "specimen": "cloud code \u2192 Claude Code", "size": 15, "weight": "semibold", "line_height": 1.3, "tracking": 0.0, "mono": false, "uppercase": false, "description": "Group heading, row title"}, {"name": "TYPE_BODY", "specimen": "Hold Right Option, speak, release. The text lands wherever you are.", "size": 13, "weight": "regular", "line_height": 1.4, "tracking": 0.0, "mono": false, "uppercase": false, "description": "Default control and content size"}, {"name": "TYPE_BODY_STRONG", "specimen": "Supabase", "size": 13, "weight": "medium", "line_height": 1.4, "tracking": 0.0, "mono": false, "uppercase": false, "description": "Emphasised body, entry term"}, {"name": "TYPE_TRANSCRIPT", "specimen": "We shipped Claude Code today, and the dictionary caught every name.", "size": 14, "weight": "regular", "line_height": 1.55, "tracking": 0.0, "mono": false, "uppercase": false, "description": "Transcript text \u2014 set larger and looser than body because it is read, not scanned"}, {"name": "TYPE_CALLOUT", "specimen": "Parakeet \u00b7 MLX \u00b7 0.41s", "size": 12, "weight": "regular", "line_height": 1.35, "tracking": 0.0, "mono": false, "uppercase": false, "description": "Secondary metadata"}, {"name": "TYPE_CAPTION", "specimen": "Today at 09:14 \u00b7 2 corrections", "size": 11, "weight": "regular", "line_height": 1.3, "tracking": 0.0, "mono": false, "uppercase": false, "description": "Timestamps, counts, hints"}, {"name": "TYPE_LABEL", "specimen": "Vocabulary", "size": 10, "weight": "medium", "line_height": 1.2, "tracking": 0.5, "mono": false, "uppercase": true, "description": "Section eyebrow"}, {"name": "TYPE_MONO", "specimen": "~/Library/Application Support/Aloud/dictionary.json", "size": 12, "weight": "regular", "line_height": 1.45, "tracking": 0.0, "mono": true, "uppercase": false, "description": "Patterns, file paths"}], "space": {"none": 0, "hair": 2, "xs": 4, "sm": 6, "md": 8, "lg": 12, "xl": 16, "2xl": 20, "3xl": 24, "4xl": 32, "5xl": 40, "6xl": 48}, "inset": {"control": 8, "row": 12, "card": 16, "window": 24, "section": 32}, "radius": {"none": 0, "sm": 4, "md": 6, "lg": 10, "xl": 14, "pill": 999}, "border": {"none": 0, "hairline": 1, "default": 1, "strong": 1.5, "focus": 2}, "shadow": {"none": {"y": 0, "blur": 0, "light": 0.0, "dark": 0.0, "description": "Flat \u2014 the default for anything in flow"}, "raised": {"y": 1, "blur": 3, "light": 0.08, "dark": 0.34, "description": "Cards and rows lifted off the window"}, "overlay": {"y": 4, "blur": 16, "light": 0.14, "dark": 0.46, "description": "Popovers, the dictionary editor sheet"}, "modal": {"y": 12, "blur": 40, "light": 0.2, "dark": 0.58, "description": "Sheets over a scrim"}}, "duration": {"instant": 0.0, "fast": 0.12, "base": 0.2, "slow": 0.32}, "easing": {"standard": [0.2, 0.0, 0.0, 1.0], "decelerate": [0.0, 0.0, 0.2, 1.0], "accelerate": [0.4, 0.0, 1.0, 1.0], "linear": [0.0, 0.0, 1.0, 1.0]}, "metric": {"control_height": 22, "control_height_large": 28, "field_height": 24, "row_height_compact": 28, "row_height": 40, "row_height_transcript": 64, "sidebar_width": 196, "sidebar_width_min": 160, "sidebar_width_max": 280, "detail_width_min": 420, "window_width": 940, "window_height": 620, "window_width_min": 720, "window_height_min": 440, "settings_width": 560, "meter_height": 6, "meter_height_large": 10, "icon_sm": 12, "icon_md": 16, "icon_lg": 20}, "meter": {"attack": 0.04, "release": 0.18, "hz": 30}, "counts": {"color": 34, "type": 11, "space": 12}}</script>
+<script>
+(function(){
+  "use strict";
+  const D = JSON.parse(document.getElementById("token-data").textContent);
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if(cls) n.className = cls; if(text!=null) n.textContent = text; return n; };
+
+  /* --- contrast, computed rather than transcribed ------------------------ */
+  function luminance(hex){
+    const h = hex.replace("#","");
+    const ch = i => { const v = parseInt(h.substr(i,2),16)/255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); };
+    return 0.2126*ch(0) + 0.7152*ch(2) + 0.0722*ch(4);
+  }
+  function contrast(a,b){ const x=luminance(a), y=luminance(b); const hi=Math.max(x,y), lo=Math.min(x,y); return (hi+0.05)/(lo+0.05); }
+  const GROUND = { light:"#F6F6F9", dark:"#1B1B20" };
+
+  document.getElementById("fact-color").textContent = D.counts.color;
+  document.getElementById("fact-type").textContent  = D.counts.type;
+  document.getElementById("fact-space").textContent = D.counts.space;
+
+  /* --- colour ------------------------------------------------------------ */
+  const groupsHost = document.getElementById("colour-groups");
+  D.colorGroups.forEach(group => {
+    const wrap = el("div","group");
+    const head = el("div","group-head"); head.appendChild(el("h3",null,group.title)); wrap.appendChild(head);
+    wrap.appendChild(el("p","group-note",group.note));
+    group.tokens.forEach(token => {
+      const plate = el("div","plate");
+      const left = el("div");
+      left.appendChild(el("p","plate-name",token.name));
+      left.appendChild(el("p","plate-note",token.description));
+      plate.appendChild(left);
+
+      const body = el("div","plate-body");
+      const chips = el("div","chips");
+      [["light",token.light],["dark",token.dark]].forEach(([mode,hex]) => {
+        const chip = el("div","chip");
+        const fill = el("i");
+        fill.style.background = hex;
+        fill.style.opacity = token.alpha;
+        chip.appendChild(fill);
+        chip.title = mode + " · " + hex;
+        chips.appendChild(chip);
+      });
+      body.appendChild(chips);
+
+      const meta = el("div","swatch-meta");
+      meta.appendChild(el("span",null,"light " )).appendChild(el("b",null,token.light));
+      meta.appendChild(el("span",null,"dark " )).appendChild(el("b",null,token.dark));
+      if(token.alpha < 1){ meta.appendChild(el("span",null,"alpha ")).appendChild(el("b",null,token.alpha.toFixed(2))); }
+
+      if(token.aa || token.dim){
+        const floor = token.aa ? 4.5 : 3.0;
+        [["light",token.light],["dark",token.dark]].forEach(([mode,hex]) => {
+          const value = contrast(hex, GROUND[mode]);
+          const pill = el("span", "ratio " + (value >= floor ? "pass" : "fail"),
+            mode + " " + value.toFixed(2) + ":1");
+          meta.appendChild(pill);
+        });
+      } else if(token.exempt){
+        meta.appendChild(el("span","ratio na", token.exempt));
+      }
+      body.appendChild(meta);
+      plate.appendChild(body);
+      wrap.appendChild(plate);
+    });
+    groupsHost.appendChild(wrap);
+  });
+
+  /* --- type -------------------------------------------------------------- */
+  const WEIGHT = { regular:400, medium:500, semibold:600, bold:700 };
+  const typeHost = document.getElementById("type-plates");
+  D.type.forEach(step => {
+    const plate = el("div","plate");
+    const left = el("div");
+    left.appendChild(el("p","plate-name",step.name));
+    left.appendChild(el("p","plate-note",step.description));
+    plate.appendChild(left);
+
+    const body = el("div","plate-body");
+    const line = el("p","specimen",step.uppercase ? step.specimen.toUpperCase() : step.specimen);
+    line.style.fontSize = step.size + "px";
+    line.style.fontWeight = WEIGHT[step.weight] || 400;
+    line.style.lineHeight = step.line_height;
+    line.style.letterSpacing = step.tracking + "px";
+    if(step.mono) line.style.fontFamily = '"IBM Plex Mono", ui-monospace, monospace';
+    body.appendChild(line);
+
+    const bits = [step.size + "pt", step.weight, "line " + step.line_height.toFixed(2)];
+    if(step.tracking) bits.push("tracking " + step.tracking);
+    if(step.mono) bits.push("mono");
+    if(step.uppercase) bits.push("uppercase");
+    body.appendChild(el("p","spec-meta",bits.join("  ·  ")));
+    plate.appendChild(body);
+    typeHost.appendChild(plate);
+  });
+
+  /* --- spacing ----------------------------------------------------------- */
+  function scaleInto(host, entries, suffix){
+    entries.forEach(([key,value]) => {
+      const row = el("div","scale-row");
+      row.appendChild(el("div","scale-key",key));
+      row.appendChild(el("div","scale-val",value + suffix));
+      const bar = el("div","bar");
+      bar.style.width = Math.max(value, 1) + "px";
+      if(value === 0){ bar.style.background = "var(--rule-strong)"; }
+      row.appendChild(bar);
+      host.appendChild(row);
+    });
+  }
+  scaleInto(document.getElementById("space-scale"), Object.entries(D.space), "");
+  scaleInto(document.getElementById("inset-scale"), Object.entries(D.inset), "");
+
+  /* --- radius ------------------------------------------------------------ */
+  const radiusHost = document.getElementById("radius-tiles");
+  Object.entries(D.radius).forEach(([key,value]) => {
+    const tile = el("figure","tile"); tile.style.margin = "0";
+    const box = el("span","box");
+    box.style.borderRadius = Math.min(value, 42) + "px";
+    tile.appendChild(box);
+    tile.appendChild(el("figcaption",null, key + " · " + (value > 100 ? "pill" : value)));
+    radiusHost.appendChild(tile);
+  });
+
+  /* --- border ------------------------------------------------------------ */
+  const borderHost = document.getElementById("border-rules");
+  Object.entries(D.border).forEach(([key,value]) => {
+    const row = el("div","scale-row");
+    row.appendChild(el("div","scale-key",key));
+    row.appendChild(el("div","scale-val",value));
+    const line = el("div","rule-line");
+    line.style.height = Math.max(value, 0.5) + "px";
+    line.style.flex = "1";
+    if(value === 0){ line.style.background = "transparent"; }
+    if(key === "focus"){ line.style.background = "var(--accent)"; }
+    row.appendChild(line);
+    borderHost.appendChild(row);
+  });
+
+  /* --- shadow ------------------------------------------------------------ */
+  const prefersDark = () => {
+    const stamped = document.documentElement.getAttribute("data-theme");
+    if(stamped) return stamped === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  };
+  const elevationHost = document.getElementById("elevations");
+  function paintElevations(){
+    elevationHost.textContent = "";
+    const dark = prefersDark();
+    Object.entries(D.shadow).forEach(([key,spec]) => {
+      const box = el("div","elevation", key);
+      const alpha = dark ? spec.dark : spec.light;
+      box.style.boxShadow = spec.blur === 0 ? "none"
+        : `0 ${spec.y}px ${spec.blur}px rgba(0,0,0,${alpha})`;
+      box.title = spec.description;
+      elevationHost.appendChild(box);
+    });
+  }
+  paintElevations();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paintElevations);
+
+  /* --- motion ------------------------------------------------------------ */
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const motionHost = document.getElementById("motion-tracks");
+  const dots = [];
+  Object.entries(D.duration).forEach(([key,seconds]) => {
+    const row = el("div","scale-row");
+    row.appendChild(el("div","scale-key",key));
+    row.appendChild(el("div","scale-val", Math.round(seconds*1000) + "ms"));
+    const track = el("div","motion-track"); track.style.flex = "1";
+    const dot = el("div","motion-dot");
+    const [a,b,c,d] = D.easing.standard;
+    dot.style.transition = `transform ${seconds}s cubic-bezier(${a},${b},${c},${d})`;
+    track.appendChild(dot);
+    row.appendChild(track);
+    motionHost.appendChild(row);
+    dots.push({dot, track});
+  });
+  function playMotion(){
+    if(reduced) return;
+    dots.forEach(({dot,track}) => {
+      dot.style.transform = "translateX(0)";
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        dot.style.transform = "translateX(" + Math.max(track.clientWidth - 24, 0) + "px)";
+      }));
+    });
+  }
+  document.getElementById("replay").addEventListener("click", playMotion);
+  setTimeout(playMotion, 500);
+  setInterval(playMotion, 3200);
+
+  /* --- the level meter, running the real ballistics ---------------------- */
+  const canvas = document.getElementById("meter");
+  const legend = document.getElementById("meter-legend");
+  legend.textContent = "attack " + Math.round(D.meter.attack*1000) + "ms\nrelease "
+    + Math.round(D.meter.release*1000) + "ms\nrefresh " + D.meter.hz + "Hz";
+  legend.style.whiteSpace = "pre";
+
+  const ctx = canvas.getContext("2d");
+  const STOPS = [
+    { at:0.00, color:{light:"#42A05F", dark:"#4FBF72"} },
+    { at:0.70, color:{light:"#C79014", dark:"#FFC148"} },
+    { at:0.92, color:{light:"#E0393E", dark:"#FF6167"} },
+  ];
+  let level = 0, target = 0, last = performance.now(), nextChange = 0;
+
+  function colourFor(value, dark){
+    let chosen = STOPS[0];
+    for(const stop of STOPS){ if(value >= stop.at) chosen = stop; }
+    return dark ? chosen.color.dark : chosen.color.light;
+  }
+  function draw(now){
+    const dt = Math.min((now - last)/1000, 0.1); last = now;
+    if(now > nextChange){
+      // A plausible speech envelope: mostly mid-level with occasional peaks.
+      target = Math.random() < 0.12 ? 0.86 + Math.random()*0.14 : Math.random()*0.62;
+      nextChange = now + 90 + Math.random()*220;
+    }
+    const tau = target > level ? D.meter.attack : D.meter.release;
+    level += (target - level) * Math.min(dt / tau, 1);
+
+    const dark = prefersDark();
+    const w = canvas.width, h = canvas.height, pad = 10, barH = 22;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle = dark ? "#2E2E36" : "#E4E4EC";
+    roundRect(pad, (h-barH)/2, w-pad*2, barH, 6); ctx.fill();
+    ctx.fillStyle = colourFor(level, dark);
+    roundRect(pad, (h-barH)/2, Math.max((w-pad*2)*level, 6), barH, 6); ctx.fill();
+    requestAnimationFrame(draw);
+  }
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+  }
+  if(reduced){
+    const dark = prefersDark();
+    ctx.fillStyle = dark ? "#2E2E36" : "#E4E4EC";
+    roundRect(10,33,820,22,6); ctx.fill();
+    ctx.fillStyle = colourFor(0.5, dark);
+    roundRect(10,33,410,22,6); ctx.fill();
+  } else {
+    requestAnimationFrame(draw);
+  }
+
+  /* --- metrics ----------------------------------------------------------- */
+  const metricRows = document.getElementById("metric-rows");
+  const metrics = Object.entries(D.metric);
+  for(let i=0; i<metrics.length; i+=2){
+    const tr = el("tr");
+    for(const pair of [metrics[i], metrics[i+1]]){
+      if(!pair){ tr.appendChild(el("td")); tr.appendChild(el("td")); continue; }
+      tr.appendChild(el("td","key",pair[0]));
+      tr.appendChild(el("td","num",String(pair[1])));
+    }
+    metricRows.appendChild(tr);
+  }
+})();
+</script>

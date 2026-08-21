@@ -3,6 +3,10 @@
 This is the layer that separates "a Whisper wrapper" from a dictation app.
 Everything here is a pure string transform, so it is cheap to test and cheap
 to extend -- an LLM cleanup pass would slot in as one more step.
+
+Vocabulary and corrections are *not* here: they live in :mod:`aloud.dictionary`
+and :mod:`aloud.corrections`, which run before this stage so the offsets they
+report line up with what the engine actually said.
 """
 
 from __future__ import annotations
@@ -23,16 +27,6 @@ def _strip_fillers(text: str, fillers: List[str]) -> str:
             rf"(?<![\w']){re.escape(filler)}(?![\w'])[,]?\s*", re.IGNORECASE
         )
         text = pattern.sub("", text)
-    return text
-
-
-def _apply_dictionary(text: str, dictionary: Dict[str, str]) -> str:
-    """Case-insensitive whole-word replacements for names and jargon."""
-    for wrong, right in dictionary.items():
-        if not wrong:
-            continue
-        pattern = re.compile(rf"(?<![\w']){re.escape(wrong)}(?![\w'])", re.IGNORECASE)
-        text = pattern.sub(right, text)
     return text
 
 
@@ -71,10 +65,6 @@ def process(text: str, options: Dict[str, Any] | None = None) -> str:
 
     if options.get("strip_fillers", True):
         text = _strip_fillers(text, options.get("fillers", []) or [])
-
-    dictionary = options.get("dictionary") or {}
-    if dictionary:
-        text = _apply_dictionary(text, dictionary)
 
     commands = options.get("commands") or {}
     if commands:

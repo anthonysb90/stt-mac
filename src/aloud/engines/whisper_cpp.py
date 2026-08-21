@@ -23,8 +23,9 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
+from ..corrections import bias_prompt
 from ..paths import MODELS_DIR, VENDOR_DIR
 from .base import EngineError, Transcript, TranscriptionEngine
 
@@ -97,6 +98,7 @@ def clean_output(raw: str) -> str:
 class WhisperCppEngine(TranscriptionEngine):
     name = "whisper_cpp"
     label = "whisper.cpp (local)"
+    supports_bias = True
 
     def __init__(self, options=None) -> None:
         super().__init__(options)
@@ -115,12 +117,12 @@ class WhisperCppEngine(TranscriptionEngine):
             return False, f"No ggml-*.bin model in {MODELS_DIR}. Run scripts/fetch_model.sh base.en."
         return True, f"{self.binary.name} + {self.model.name}"
 
-    def transcribe(self, wav_path: Path) -> Transcript:
+    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
         ok, detail = self.check()
         if not ok:
             raise EngineError(detail)
 
-        command = self._build_command(wav_path)
+        command = self._build_command(wav_path, bias_terms)
         log.debug("Running: %s", " ".join(command))
         started = time.monotonic()
         try:
@@ -151,7 +153,7 @@ class WhisperCppEngine(TranscriptionEngine):
 
     # -- internals ---------------------------------------------------------
 
-    def _build_command(self, wav_path: Path) -> List[str]:
+    def _build_command(self, wav_path: Path, bias_terms: Sequence[str] = ()) -> List[str]:
         assert self.binary is not None and self.model is not None
         command = [
             str(self.binary),
@@ -166,6 +168,9 @@ class WhisperCppEngine(TranscriptionEngine):
         threads = int(self.options.get("threads", 0) or 0)
         if threads > 0:
             command += ["-t", str(threads)]
+        prompt = bias_prompt(bias_terms)
+        if prompt:
+            command += ["--prompt", prompt]
         extra = self.options.get("extra_args") or []
         command += [str(arg) for arg in extra]
         return command

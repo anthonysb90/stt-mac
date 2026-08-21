@@ -91,9 +91,6 @@ DEFAULTS: Dict[str, Any] = {
         "fillers": ["um", "uh", "erm", "hmm", "mhm", "you know"],
         "capitalize_first": True,
         "collapse_whitespace": True,
-        # Literal replacements applied after transcription, case-insensitive on
-        # the key. Useful for names and jargon Whisper keeps getting wrong.
-        "dictionary": {},
         # Spoken phrases replaced with literal characters.
         "commands": {
             "new line": "\n",
@@ -106,6 +103,19 @@ DEFAULTS: Dict[str, Any] = {
         "stop_sound": "Pop",
         "error_sound": "Basso",
         "notify_on_error": True,
+    },
+    # Vocabulary and corrections live in their own hand-editable file,
+    # dictionary.json, not here. These are only the knobs.
+    "dictionary": {
+        "enabled": True,
+        "bias": {
+            # Prime the engine with dictionary words before it decodes.
+            # Ignored by engines that cannot take a prompt (Parakeet).
+            "enabled": True,
+            # Kept deliberately small: a long prompt makes these models drift
+            # and invent text over quiet audio.
+            "max_terms": 12,
+        },
     },
     "history": {"enabled": True, "max_entries": 500},
     "logging": {"level": "INFO"},

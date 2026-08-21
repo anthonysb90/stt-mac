@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Sequence, Tuple
 
 
 @dataclass
@@ -34,13 +34,22 @@ class TranscriptionEngine(abc.ABC):
     name: str = "base"
     #: Shown in the UI.
     label: str = "Base"
+    #: Whether this backend can be primed with vocabulary before decoding.
+    #: Whisper-family models take an initial prompt; Parakeet's CTC/TDT decoder
+    #: has nowhere to put one. The Dictionary's correction pass is what covers
+    #: the difference, which is why it is not optional.
+    supports_bias: bool = False
 
     def __init__(self, options: Dict[str, Any] | None = None) -> None:
         self.options = options or {}
 
     @abc.abstractmethod
-    def transcribe(self, wav_path: Path) -> Transcript:
-        """Turn a 16 kHz mono WAV file into text."""
+    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+        """Turn a 16 kHz mono WAV file into text.
+
+        ``bias_terms`` is a short vocabulary list from the Dictionary. Backends
+        that cannot use it ignore it; none may fail because of it.
+        """
 
     @abc.abstractmethod
     def check(self) -> Tuple[bool, str]:

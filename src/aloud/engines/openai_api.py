@@ -20,8 +20,9 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Tuple
+from typing import Sequence, Tuple
 
+from ..corrections import bias_prompt
 from .base import EngineError, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ def _multipart(fields: dict[str, str], file_field: str, path: Path) -> Tuple[byt
 class OpenAIEngine(TranscriptionEngine):
     name = "openai"
     label = "OpenAI API (cloud)"
+    supports_bias = True
 
     # -- contract ----------------------------------------------------------
 
@@ -60,7 +62,7 @@ class OpenAIEngine(TranscriptionEngine):
             return False, f"${env_var} is not set in the app's environment."
         return True, f"{self.options.get('model', 'whisper-1')} via {self._base_url()}"
 
-    def transcribe(self, wav_path: Path) -> Transcript:
+    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
         ok, detail = self.check()
         if not ok:
             raise EngineError(detail)
@@ -72,6 +74,9 @@ class OpenAIEngine(TranscriptionEngine):
         language = self.options.get("language", "")
         if language:
             fields["language"] = language
+        prompt = bias_prompt(bias_terms)
+        if prompt:
+            fields["prompt"] = prompt
 
         body, content_type = _multipart(fields, "file", wav_path)
         request = urllib.request.Request(

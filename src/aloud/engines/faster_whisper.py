@@ -17,8 +17,9 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Tuple
+from typing import Sequence, Tuple
 
+from ..corrections import bias_prompt
 from .base import EngineError, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ DEFAULT_MODEL = "base.en"
 class FasterWhisperEngine(TranscriptionEngine):
     name = "faster_whisper"
     label = "faster-whisper (local, CPU)"
+    supports_bias = True
 
     def __init__(self, options=None) -> None:
         super().__init__(options)
@@ -52,10 +54,11 @@ class FasterWhisperEngine(TranscriptionEngine):
         except EngineError as exc:
             log.warning("faster-whisper warm-up failed: %s", exc)
 
-    def transcribe(self, wav_path: Path) -> Transcript:
+    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
         model = self._load()
         started = time.monotonic()
         language = str(self.options.get("language", "") or "") or None
+        prompt = bias_prompt(bias_terms) or None
         try:
             # `segments` is a generator; iterating it is what does the work.
             segments, info = model.transcribe(
@@ -64,6 +67,7 @@ class FasterWhisperEngine(TranscriptionEngine):
                 beam_size=int(self.options.get("beam_size", 1)),
                 vad_filter=bool(self.options.get("vad_filter", True)),
                 condition_on_previous_text=False,  # avoids run-on hallucinations
+                initial_prompt=prompt,
             )
             text = " ".join(segment.text.strip() for segment in segments).strip()
         except Exception as exc:

@@ -24,9 +24,10 @@ from typing import Optional
 
 import rumps
 
-from . import APP_NAME, __version__, engines, history, hotkey as hotkey_mod, permissions
+from . import APP_NAME, __version__, corrections, engines, history, hotkey as hotkey_mod, permissions
 from .audio import AudioError, Recorder, wav_duration
 from .config import Config
+from .dictionary import Dictionary
 from .feedback import Feedback
 from .injector import TextInjector
 from .mainthread import run_on_main
@@ -74,6 +75,11 @@ class AloudApp(rumps.App):
         )
         self.feedback = Feedback(config.get("feedback", {}))
         self.engine = engines.select(config)
+
+        # The Dictionary is advertised as hand-editable, so it is re-read
+        # before each dictation rather than cached for the life of the app.
+        self.dictionary = Dictionary.load()
+        self._ruleset = corrections.ruleset_for(self.dictionary)
         self.listener: Optional[hotkey_mod.HotkeyListener] = None
 
         self._jobs: "queue.Queue[object]" = queue.Queue()
@@ -258,8 +264,12 @@ class AloudApp(rumps.App):
 
     def _transcribe_and_deliver(self, wav_path: Path) -> None:
         started = time.monotonic()
-        transcript = self.engine.transcribe(wav_path)
-        text = process(transcript.text, self.config.get("postprocess", {}))
+        transcript = self.engine.transcribe(wav_path, bias_terms=self._bias_terms())
+
+        # Corrections run on the raw transcript, before any other cleanup, so
+        # the offsets they report point at what the engine actually produced.
+        result = self._corrections_for(transcript.text)
+        text = process(result.text, self.config.get("postprocess", {}))
         elapsed = time.monotonic() - started
 
         if not text:
@@ -267,8 +277,14 @@ class AloudApp(rumps.App):
             run_on_main(lambda: self._set_state(State.IDLE))
             return
 
-        log.info("Transcribed %d chars in %.2fs via %s", len(text), elapsed, transcript.engine)
+        log.info(
+            "Transcribed %d chars in %.2fs via %s (%d corrections)",
+            len(text), elapsed, transcript.engine, len(result.applied),
+        )
         self.injector.deliver(text)
+
+        for applied in result.applied:
+            self.dictionary.record_hit(applied.entry_id)
 
         if self.config.get("history.enabled", True):
             history.record(
@@ -276,10 +292,40 @@ class AloudApp(rumps.App):
                 transcript.engine,
                 elapsed,
                 int(self.config.get("history.max_entries", 500)),
+                corrections=[applied.to_dict() for applied in result.applied],
+                raw=result.original,
             )
 
         preview = text if len(text) <= 48 else text[:45] + "…"
         run_on_main(lambda: self._show_last(preview, elapsed))
+
+    # -- dictionary --------------------------------------------------------
+
+    def _refresh_dictionary(self) -> None:
+        """Pick up edits made to dictionary.json outside the app."""
+        try:
+            if self.dictionary.reload_if_changed():
+                self._ruleset = corrections.ruleset_for(self.dictionary)
+                log.info("Reloaded the dictionary (%d entries)", len(self.dictionary))
+        except Exception:
+            log.exception("Could not reload the dictionary; keeping the current rules")
+
+    def _bias_terms(self) -> list:
+        """The short vocabulary list handed to the engine, if it can use one."""
+        if not self.config.get("dictionary.enabled", True):
+            return []
+        if not self.config.get("dictionary.bias.enabled", True):
+            return []
+        if not getattr(self.engine, "supports_bias", False):
+            return []
+        self._refresh_dictionary()
+        return self.dictionary.bias_terms(int(self.config.get("dictionary.bias.max_terms", 12)))
+
+    def _corrections_for(self, text: str) -> corrections.CorrectionResult:
+        if not self.config.get("dictionary.enabled", True):
+            return corrections.CorrectionResult(original=text, text=text)
+        self._refresh_dictionary()
+        return self._ruleset.apply(text)
 
     # -- state -------------------------------------------------------------
 

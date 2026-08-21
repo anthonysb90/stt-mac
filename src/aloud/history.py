@@ -9,21 +9,39 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .paths import HISTORY_FILE, ensure_dirs
 
 log = logging.getLogger(__name__)
 
 
-def record(text: str, engine: str, seconds: float, max_entries: int = 500) -> None:
+def record(
+    text: str,
+    engine: str,
+    seconds: float,
+    max_entries: int = 500,
+    corrections: Optional[List[Dict[str, Any]]] = None,
+    raw: str = "",
+) -> None:
+    """Append one dictation.
+
+    ``corrections`` and ``raw`` are stored only when the Dictionary actually
+    changed something. That is what lets the history view answer the question
+    the Dictionary exists to raise -- is any of this doing anything? -- without
+    doubling the size of every ordinary entry.
+    """
     ensure_dirs()
-    entry = {
+    entry: Dict[str, Any] = {
         "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "engine": engine,
         "seconds": round(seconds, 3),
         "text": text,
     }
+    if corrections:
+        entry["corrections"] = corrections
+        if raw and raw != text:
+            entry["raw"] = raw
     try:
         with HISTORY_FILE.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")

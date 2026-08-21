@@ -25,6 +25,11 @@ doctor: ## Report engine, input device, and permission status
 warm: ## Load the selected engine, downloading its model if needed
 	$(PYTHON) -m aloud warm
 
+.PHONY: tokens
+tokens: ## Dump the design tokens to docs/tokens.json
+	$(PYTHON) -c "from aloud.ui import tokens; print(tokens.as_json())" > docs/tokens.json
+	@echo "wrote docs/tokens.json"
+
 .PHONY: icon
 icon: ## Regenerate the app icon from the procedural source
 	python3 scripts/make_icon_png.py --out assets/Aloud-1024.png --size 1024

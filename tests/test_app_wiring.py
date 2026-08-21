@@ -53,10 +53,19 @@ class CapturingInjector:
         self.delivered.append(text)
 
 
+def _rebuild(app):
+    """Recompile the ruleset after a test edits the dictionary."""
+    from aloud import corrections
+
+    return corrections.ruleset_for(app.dictionary)
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr("aloud.history.HISTORY_FILE", tmp_path / "history.jsonl")
     monkeypatch.setattr("aloud.history.ensure_dirs", lambda: None)
+    monkeypatch.setattr("aloud.dictionary.DICTIONARY_FILE", tmp_path / "dictionary.json")
+    monkeypatch.setattr("aloud.dictionary.ensure_dirs", lambda: None)
 
     config = Config()
     config.set("engine", "mock")
@@ -129,3 +138,89 @@ def test_dictation_is_written_to_history(app, tmp_path):
     app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
     entries = history.recent(5)
     assert entries and entries[0]["text"] == "Hello there\nfriend"
+
+
+# -- dictionary integration --------------------------------------------------
+
+
+def test_the_dictionary_corrects_before_the_text_is_delivered(app, tmp_path):
+    app.config.set("engines.mock.text", "we shipped cloud code today")
+    app.engine.options["text"] = "we shipped cloud code today"
+    app.dictionary.add_correction("cloud code", "Claude Code")
+    app._ruleset = _rebuild(app)
+
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert app.injector.delivered == ["We shipped Claude Code today"]
+
+
+def test_a_correction_that_fires_is_written_to_history(app, tmp_path):
+    from aloud import history
+
+    app.config.set("engines.mock.text", "open cloud code")
+    app.engine.options["text"] = "open cloud code"
+    app.dictionary.add_correction("cloud code", "Claude Code")
+    app._ruleset = _rebuild(app)
+
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    entry = history.recent(1)[0]
+    assert entry["corrections"] == [
+        {"entry": app.dictionary.entries[0].id, "from": "cloud code", "to": "Claude Code", "at": 5}
+    ]
+    assert entry["raw"] == "open cloud code"
+
+
+def test_history_stays_lean_when_nothing_was_corrected(app, tmp_path):
+    from aloud import history
+
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    entry = history.recent(1)[0]
+    assert "corrections" not in entry and "raw" not in entry
+
+
+def test_entries_count_their_hits(app, tmp_path):
+    app.config.set("engines.mock.text", "cloud code and cloud code")
+    app.engine.options["text"] = "cloud code and cloud code"
+    entry = app.dictionary.add_correction("cloud code", "Claude Code")
+    app._ruleset = _rebuild(app)
+
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert app.dictionary.get(entry.id).hits == 2
+
+
+def test_bias_terms_reach_an_engine_that_supports_them(app, tmp_path):
+    app.dictionary.add_term("Supabase")
+    transcript = app.engine.transcribe(
+        _silent_wav(tmp_path / "job.wav"), bias_terms=app._bias_terms()
+    )
+    assert transcript.meta["bias"] == ["Supabase"]
+
+
+def test_no_bias_is_sent_to_an_engine_that_cannot_use_it(app):
+    app.dictionary.add_term("Supabase")
+    app.engine.supports_bias = False
+    assert app._bias_terms() == []
+
+
+def test_biasing_can_be_turned_off_without_disabling_corrections(app, tmp_path):
+    app.config.set("dictionary.bias.enabled", False)
+    app.config.set("engines.mock.text", "cloud code")
+    app.engine.options["text"] = "cloud code"
+    app.dictionary.add_term("Supabase")
+    app.dictionary.add_correction("cloud code", "Claude Code")
+    app._ruleset = _rebuild(app)
+
+    assert app._bias_terms() == []
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert app.injector.delivered == ["Claude Code"]
+
+
+def test_disabling_the_dictionary_turns_off_both_mechanisms(app, tmp_path):
+    app.config.set("dictionary.enabled", False)
+    app.config.set("engines.mock.text", "cloud code")
+    app.engine.options["text"] = "cloud code"
+    app.dictionary.add_correction("cloud code", "Claude Code")
+    app._ruleset = _rebuild(app)
+
+    assert app._bias_terms() == []
+    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    assert app.injector.delivered == ["Cloud code"]
