@@ -128,4 +128,4 @@ class TextInjector:
             except Exception:
                 log.exception("Failed to restore the clipboard")
 
-        threading.Thread(target=restore, name="murmur-clipboard", daemon=True).start()
+        threading.Thread(target=restore, name="aloud-clipboard", daemon=True).start()

@@ -4,12 +4,12 @@
 #
 #   ./scripts/fetch_model.sh [tiny.en|base.en|small.en|medium.en|large-v3-turbo]
 #
-# Models land in ~/Library/Application Support/Murmur/models and are picked up
+# Models land in ~/Library/Application Support/Aloud/models and are picked up
 # automatically (newest first) unless engines.whisper_cpp.model is set.
 set -euo pipefail
 
 MODEL="${1:-base.en}"
-MODELS_DIR="$HOME/Library/Application Support/Murmur/models"
+MODELS_DIR="$HOME/Library/Application Support/Aloud/models"
 BASE_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 TARGET="$MODELS_DIR/ggml-${MODEL}.bin"
 

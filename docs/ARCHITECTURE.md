@@ -1,4 +1,4 @@
-# Murmur — architecture
+# Aloud — architecture
 
 ## What we're cloning
 
@@ -66,7 +66,7 @@ in-place streaming overlay Wispr shows while you talk.
 
 ```
       ┌──────────────┐   key down/up    ┌──────────────┐
-      │  Quartz      │─────────────────▶│  MurmurApp   │   main thread
+      │  Quartz      │─────────────────▶│  AloudApp   │   main thread
       │  event tap   │                  │  state       │   (AppKit run loop)
       └──────────────┘                  └──────┬───────┘
                                                │ start / stop
@@ -144,10 +144,10 @@ do not follow the app.
 **Ad-hoc signing caveat.** `codesign --sign -` produces a fresh identity on
 every build, so macOS treats each rebuild as a new app and drops the
 Accessibility grant. To keep it: open Keychain Access → Certificate Assistant →
-Create a Certificate, type **Code Signing**, name it e.g. `Murmur Dev`, then
+Create a Certificate, type **Code Signing**, name it e.g. `Aloud Dev`, then
 
 ```sh
-CODESIGN_IDENTITY="Murmur Dev" make dev-app
+CODESIGN_IDENTITY="Aloud Dev" make dev-app
 ```
 
 ## Packaging across two architectures

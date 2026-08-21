@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from murmur.app import MurmurApp, State
-from murmur.config import Config
+from aloud.app import AloudApp, State
+from aloud.config import Config
 
 
 def _silent_wav(path: Path, seconds: float = 1.0, rate: int = 16000) -> Path:
@@ -55,8 +55,8 @@ class CapturingInjector:
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    monkeypatch.setattr("murmur.history.HISTORY_FILE", tmp_path / "history.jsonl")
-    monkeypatch.setattr("murmur.history.ensure_dirs", lambda: None)
+    monkeypatch.setattr("aloud.history.HISTORY_FILE", tmp_path / "history.jsonl")
+    monkeypatch.setattr("aloud.history.ensure_dirs", lambda: None)
 
     config = Config()
     config.set("engine", "mock")
@@ -64,8 +64,8 @@ def app(tmp_path, monkeypatch):
     config.set("feedback.sounds", False)
     config.set("feedback.notify_on_error", False)
 
-    monkeypatch.setattr("murmur.app.Recorder", lambda **_kwargs: FakeRecorder(tmp_path / "x.wav"))
-    instance = MurmurApp(config)
+    monkeypatch.setattr("aloud.app.Recorder", lambda **_kwargs: FakeRecorder(tmp_path / "x.wav"))
+    instance = AloudApp(config)
     instance.recorder = FakeRecorder(_silent_wav(tmp_path / "speech.wav"))
     instance.injector = CapturingInjector()
     return instance
@@ -124,7 +124,7 @@ def test_empty_transcript_is_not_delivered(app, tmp_path):
 
 
 def test_dictation_is_written_to_history(app, tmp_path):
-    from murmur import history
+    from aloud import history
 
     app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
     entries = history.recent(5)

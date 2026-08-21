@@ -1,4 +1,4 @@
-from murmur.engines.whisper_cpp import clean_output
+from aloud.engines.whisper_cpp import clean_output
 
 
 def test_strips_timestamps():

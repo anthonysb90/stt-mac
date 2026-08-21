@@ -1,7 +1,7 @@
 """Minimal stand-ins for the macOS frameworks.
 
-They exist so the wiring in :mod:`murmur.app` can be exercised on a machine
-without AppKit -- CI, a Linux box, a container. They implement only what Murmur
+They exist so the wiring in :mod:`aloud.app` can be exercised on a machine
+without AppKit -- CI, a Linux box, a container. They implement only what Aloud
 actually calls, and are installed by ``conftest.py`` only when the real
 frameworks are unavailable.
 """

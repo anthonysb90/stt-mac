@@ -1,4 +1,4 @@
-# Murmur — push-to-talk dictation for macOS
+# Aloud — push-to-talk dictation for macOS
 PYTHON ?= ./.venv/bin/python
 export PYTHONPATH := src
 
@@ -15,21 +15,21 @@ bootstrap: ## Install toolchain, dependencies, whisper.cpp, and a model
 
 .PHONY: run
 run: ## Run from the terminal (permissions attach to the terminal app)
-	$(PYTHON) -m murmur run
+	$(PYTHON) -m aloud run
 
 .PHONY: doctor
 doctor: ## Report engine, input device, and permission status
-	$(PYTHON) -m murmur doctor
+	$(PYTHON) -m aloud doctor
 
 .PHONY: icon
 icon: ## Regenerate the app icon from the procedural source
-	python3 scripts/make_icon_png.py --out assets/Murmur-1024.png --size 1024
+	python3 scripts/make_icon_png.py --out assets/Aloud-1024.png --size 1024
 	./scripts/make_icns.sh
 
 .PHONY: dev-app
 dev-app: ## Build the alias .app and launch it
 	./scripts/build_app.sh alias
-	open dist/Murmur.app
+	open dist/Aloud.app
 
 .PHONY: app
 app: ## Build the standalone, distributable .app
@@ -41,5 +41,5 @@ test: ## Run the unit tests
 
 .PHONY: clean
 clean: ## Remove build output
-	rm -rf build dist assets/Murmur.iconset assets/Murmur.icns
+	rm -rf build dist assets/Aloud.iconset assets/Aloud.icns
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +

@@ -7,7 +7,7 @@ if sys.platform == "darwin":  # pragma: no cover - needs a real pasteboard
 
 import Quartz  # the stub installed by conftest
 
-from murmur.injector import TextInjector, read_clipboard, write_clipboard
+from aloud.injector import TextInjector, read_clipboard, write_clipboard
 
 
 @pytest.fixture(autouse=True)

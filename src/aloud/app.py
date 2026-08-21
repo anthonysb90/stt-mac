@@ -8,7 +8,7 @@ Threading model
 * One **worker thread** drains a queue of finished recordings, runs the engine,
   and posts the keystrokes. Serialising through a single worker means two quick
   dictations can never interleave their pastes.
-* UI updates hop back to the main thread via :mod:`murmur.mainthread`.
+* UI updates hop back to the main thread via :mod:`aloud.mainthread`.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ GLYPHS = {
 _STOP = object()  # sentinel that shuts the worker down
 
 
-class MurmurApp(rumps.App):
+class AloudApp(rumps.App):
     def __init__(self, config: Config) -> None:
         super().__init__(APP_NAME, title=GLYPHS[State.IDLE], quit_button=None)
         self.config = config
@@ -80,7 +80,7 @@ class MurmurApp(rumps.App):
 
         self._jobs: "queue.Queue[object]" = queue.Queue()
         self._worker = threading.Thread(
-            target=self._drain_jobs, name="murmur-transcribe", daemon=True
+            target=self._drain_jobs, name="aloud-transcribe", daemon=True
         )
         self._max_duration_timer: Optional[threading.Timer] = None
 

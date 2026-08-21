@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# Build assets/Murmur.icns from assets/Murmur-1024.png.
+# Build assets/Aloud.icns from assets/Aloud-1024.png.
 # Uses sips and iconutil, both of which ship with the Command Line Tools.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-SOURCE="assets/Murmur-1024.png"
-ICONSET="assets/Murmur.iconset"
-OUTPUT="assets/Murmur.icns"
+SOURCE="assets/Aloud-1024.png"
+ICONSET="assets/Aloud.iconset"
+OUTPUT="assets/Aloud.icns"
 
 if [ ! -f "$SOURCE" ]; then
   printf '\033[1;34m==>\033[0m Generating %s\n' "$SOURCE"

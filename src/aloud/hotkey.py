@@ -2,7 +2,7 @@
 
 A CGEventTap sees keyboard events system-wide before they reach the focused
 app, which is the only way to implement "hold this key anywhere" on macOS.
-It requires the Accessibility permission (see :mod:`murmur.permissions`).
+It requires the Accessibility permission (see :mod:`aloud.permissions`).
 
 The tap is installed in *listen-only* mode: we observe the key but never
 swallow it. That keeps the tap from interfering with normal typing, at the

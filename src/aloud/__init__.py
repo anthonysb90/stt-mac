@@ -1,4 +1,4 @@
-"""Murmur — a push-to-talk dictation app for macOS.
+"""Aloud — a push-to-talk dictation app for macOS.
 
 Hold a key, speak, release. Whatever you said is transcribed and typed into
 whichever app currently has focus.
@@ -14,8 +14,8 @@ independently (see docs/ARCHITECTURE.md):
     app       -> the menu bar shell that wires those together
 """
 
-APP_NAME = "Murmur"
-BUNDLE_ID = "com.murmur.Murmur"
+APP_NAME = "Aloud"
+BUNDLE_ID = "com.aloud.Aloud"
 __version__ = "0.1.0"
 
 __all__ = ["APP_NAME", "BUNDLE_ID", "__version__"]

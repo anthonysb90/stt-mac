@@ -1,11 +1,11 @@
 <div align="center">
 
-<img src="assets/Murmur-1024.png" width="120" alt="Murmur">
+<img src="assets/Aloud-1024.png" width="120" alt="Aloud">
 
-# Murmur
+# Aloud
 
-**Push-to-talk dictation for macOS.** Hold a key, talk, release — your words
-land in whatever app you're looking at.
+**Say it aloud, see it typed.** Push-to-talk dictation for macOS: hold a key,
+talk, release — your words land in whatever app you're looking at.
 
 </div>
 
@@ -44,9 +44,9 @@ Then build and launch the app:
 make dev-app
 ```
 
-On first launch macOS asks for **Microphone** access. You must also add Murmur
+On first launch macOS asks for **Microphone** access. You must also add Aloud
 under **System Settings → Privacy & Security → Accessibility** by hand — there
-is no way for an app to grant that itself. Quit and reopen Murmur afterwards.
+is no way for an app to grant that itself. Quit and reopen Aloud afterwards.
 
 Now hold **Right Option**, say something, and release.
 
@@ -64,14 +64,14 @@ make icon        # regenerate the app icon
 The CLI also works standalone, which is handy for isolating problems:
 
 ```sh
-.venv/bin/python -m murmur doctor
-.venv/bin/python -m murmur transcribe some.wav
-.venv/bin/python -m murmur history -n 20
+.venv/bin/python -m aloud doctor
+.venv/bin/python -m aloud transcribe some.wav
+.venv/bin/python -m aloud history -n 20
 ```
 
 ## Configuration
 
-`~/Library/Application Support/Murmur/config.json`, or **Open Config…** in the
+`~/Library/Application Support/Aloud/config.json`, or **Open Config…** in the
 menu. Anything you leave out falls back to a default, so a two-line file is
 valid.
 
@@ -143,7 +143,7 @@ Written and tested on Linux, which means:
 
 **The hotkey does nothing.** Accessibility is not granted, or it was granted to
 a previous build. Menu → *Check Permissions…*. After an ad-hoc-signed rebuild
-you have to remove and re-add Murmur in the Accessibility list — see the
+you have to remove and re-add Aloud in the Accessibility list — see the
 signing note in the architecture doc for how to avoid that.
 
 **Text goes to the wrong place.** `paste` mode sends Cmd-V to whatever has
@@ -156,12 +156,12 @@ path.
 **It's slow on the Intel Mac.** Expected — there's no GPU path there. Drop to
 `base.en` or `tiny.en`, or switch to the `openai` engine for that machine.
 
-**Nothing at all happens.** `tail -f ~/Library/Logs/Murmur/murmur.log`.
+**Nothing at all happens.** `tail -f ~/Library/Logs/Aloud/aloud.log`.
 
 ## Layout
 
 ```
-src/murmur/
+src/aloud/
   app.py          menu bar shell, state machine, job queue
   hotkey.py       Quartz event tap, push-to-talk edges
   audio.py        microphone capture → WAV

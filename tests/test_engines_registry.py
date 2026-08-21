@@ -1,7 +1,7 @@
 import pytest
 
-from murmur import engines
-from murmur.engines.base import EngineError
+from aloud import engines
+from aloud.engines.base import EngineError
 
 
 def test_every_registered_engine_declares_its_own_name():
@@ -27,7 +27,7 @@ def test_mock_engine_is_always_ready(tmp_path):
 
 
 def test_openai_engine_reports_a_missing_key():
-    engine = engines.build("openai", {"api_key_env": "MURMUR_DEFINITELY_UNSET"})
+    engine = engines.build("openai", {"api_key_env": "ALOUD_DEFINITELY_UNSET"})
     ok, detail = engine.check()
     assert not ok
-    assert "MURMUR_DEFINITELY_UNSET" in detail
+    assert "ALOUD_DEFINITELY_UNSET" in detail

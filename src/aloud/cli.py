@@ -76,7 +76,7 @@ def _cmd_history(limit: int) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="murmur", description=f"{APP_NAME} dictation")
+    parser = argparse.ArgumentParser(prog="aloud", description=f"{APP_NAME} dictation")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", help="launch the menu bar app (default)")
@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "history":
         return _cmd_history(args.limit)
 
-    from .app import MurmurApp
+    from .app import AloudApp
 
-    MurmurApp(config).start()
+    AloudApp(config).start()
     return 0

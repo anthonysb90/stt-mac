@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the placeholder Murmur app mark as a 1024x1024 PNG.
+"""Draw the placeholder Aloud app mark as a 1024x1024 PNG.
 
 Pure standard library: no Pillow, no design tool, nothing to install. The mark
 is a rounded square with a vertical gradient and a five-bar waveform, drawn at
@@ -121,7 +121,7 @@ def write_png(path: Path, size: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=Path("assets/Murmur-1024.png"))
+    parser.add_argument("--out", type=Path, default=Path("assets/Aloud-1024.png"))
     parser.add_argument("--size", type=int, default=1024)
     args = parser.parse_args()
     write_png(args.out, args.size)

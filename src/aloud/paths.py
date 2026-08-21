@@ -16,7 +16,7 @@ CONFIG_FILE = SUPPORT_DIR / "config.json"
 MODELS_DIR = SUPPORT_DIR / "models"
 VENDOR_DIR = SUPPORT_DIR / "vendor"
 HISTORY_FILE = SUPPORT_DIR / "history.jsonl"
-LOG_FILE = LOG_DIR / "murmur.log"
+LOG_FILE = LOG_DIR / "aloud.log"
 
 
 def ensure_dirs() -> None:

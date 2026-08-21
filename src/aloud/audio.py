@@ -126,7 +126,7 @@ class Recorder:
 
     def _write_wav(self, pcm: bytes) -> Path:
         handle = tempfile.NamedTemporaryFile(
-            prefix="murmur-", suffix=".wav", delete=False
+            prefix="aloud-", suffix=".wav", delete=False
         )
         handle.close()
         path = Path(handle.name)

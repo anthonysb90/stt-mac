@@ -1,6 +1,6 @@
 import json
 
-from murmur.config import DEFAULTS, Config, _deep_merge
+from aloud.config import DEFAULTS, Config, _deep_merge
 
 
 def test_deep_merge_preserves_untouched_branches():
@@ -36,14 +36,14 @@ def test_engine_options_follow_the_selected_engine():
 def test_load_falls_back_to_defaults_on_bad_json(tmp_path, monkeypatch):
     bad = tmp_path / "config.json"
     bad.write_text("{ not json")
-    monkeypatch.setattr("murmur.config.CONFIG_FILE", bad)
+    monkeypatch.setattr("aloud.config.CONFIG_FILE", bad)
     assert Config.load().get("engine") == DEFAULTS["engine"]
 
 
 def test_save_then_load_round_trips(tmp_path, monkeypatch):
     target = tmp_path / "config.json"
-    monkeypatch.setattr("murmur.config.CONFIG_FILE", target)
-    monkeypatch.setattr("murmur.config.ensure_dirs", lambda: None)
+    monkeypatch.setattr("aloud.config.CONFIG_FILE", target)
+    monkeypatch.setattr("aloud.config.ensure_dirs", lambda: None)
     config = Config()
     config.set("hotkey.key", "fn")
     config.save()

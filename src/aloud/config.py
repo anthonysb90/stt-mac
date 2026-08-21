@@ -1,6 +1,6 @@
 """Configuration: layered defaults, user overrides, and live reload.
 
-The config file is plain JSON at ``~/Library/Application Support/Murmur/config.json``.
+The config file is plain JSON at ``~/Library/Application Support/Aloud/config.json``.
 Anything the user omits falls back to ``DEFAULTS``, so a partial file is always
 valid and new options gain sensible values on upgrade.
 """
@@ -21,7 +21,7 @@ DEFAULTS: Dict[str, Any] = {
         # "hold"   -> record while the key is down (true push-to-talk)
         # "toggle" -> tap once to start, tap again to stop (hands-free)
         "mode": "hold",
-        # See murmur.hotkey.MODIFIER_KEYS for the full list. "right_option" is
+        # See aloud.hotkey.MODIFIER_KEYS for the full list. "right_option" is
         # the default because, unlike "fn", it has no built-in system action to
         # collide with.
         "key": "right_option",

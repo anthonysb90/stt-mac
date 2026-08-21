@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 def _multipart(fields: dict[str, str], file_field: str, path: Path) -> Tuple[bytes, str]:
     """Encode a multipart/form-data body. Returns ``(body, content_type)``."""
-    boundary = f"----murmur{uuid.uuid4().hex}"
+    boundary = f"----aloud{uuid.uuid4().hex}"
     parts: list[bytes] = []
     for name, value in fields.items():
         parts.append(

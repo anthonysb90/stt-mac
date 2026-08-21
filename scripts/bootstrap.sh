@@ -11,7 +11,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 REPO_ROOT="$PWD"
-SUPPORT_DIR="$HOME/Library/Application Support/Murmur"
+SUPPORT_DIR="$HOME/Library/Application Support/Aloud"
 MODELS_DIR="$SUPPORT_DIR/models"
 VENDOR_DIR="$SUPPORT_DIR/vendor"
 ARCH="$(uname -m)"
@@ -20,7 +20,7 @@ info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 die()   { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname -s)" = "Darwin" ] || die "Murmur is macOS only."
+[ "$(uname -s)" = "Darwin" ] || die "Aloud is macOS only."
 info "Architecture: $ARCH"
 
 # --- 1. Xcode Command Line Tools -------------------------------------------
@@ -103,20 +103,20 @@ if [ "$ARCH" = "arm64" ]; then
 else
   DEFAULT_MODEL="base.en"
 fi
-MODEL="${MURMUR_MODEL:-$DEFAULT_MODEL}"
+MODEL="${ALOUD_MODEL:-$DEFAULT_MODEL}"
 ./scripts/fetch_model.sh "$MODEL"
 
 # --- 5. Report --------------------------------------------------------------
 info "Running diagnostics"
-PYTHONPATH="$REPO_ROOT/src" ./.venv/bin/python -m murmur doctor || true
+PYTHONPATH="$REPO_ROOT/src" ./.venv/bin/python -m aloud doctor || true
 
 cat <<'NEXT'
 
 Next steps
-  make dev-app     build Murmur.app (alias build) and open it
+  make dev-app     build Aloud.app (alias build) and open it
   make run         run in the terminal instead (permissions attach to the terminal)
 
-The first launch will ask for Microphone access, and you must add Murmur under
+The first launch will ask for Microphone access, and you must add Aloud under
 System Settings > Privacy & Security > Accessibility by hand. Quit and reopen
 the app after granting it.
 NEXT

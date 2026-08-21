@@ -1,6 +1,6 @@
 """macOS privacy (TCC) permission checks.
 
-Murmur needs two grants:
+Aloud needs two grants:
 
 Accessibility  to observe the hotkey system-wide and to synthesize the paste.
 Microphone     to record.

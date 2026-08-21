@@ -1,5 +1,5 @@
-from murmur import hotkey as hotkey_mod
-from murmur.hotkey import MODIFIER_KEYS, HotkeyError, HotkeyListener
+from aloud import hotkey as hotkey_mod
+from aloud.hotkey import MODIFIER_KEYS, HotkeyError, HotkeyListener
 
 import pytest
 

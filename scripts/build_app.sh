@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build Murmur.app.
+# Build Aloud.app.
 #
 #   ./scripts/build_app.sh alias        # dev build: bundle points at this checkout
 #   ./scripts/build_app.sh standalone   # distributable: self-contained bundle
@@ -13,7 +13,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 MODE="${1:-alias}"
-APP="dist/Murmur.app"
+APP="dist/Aloud.app"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
