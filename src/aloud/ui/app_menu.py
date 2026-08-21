@@ -60,7 +60,7 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
         "Services", None, "")
     services_item.setSubmenu_(services)
     app_menu.addItem_(services_item)
-    AppKit.NSApp.setServicesMenu_(services)
+    AppKit.NSApplication.sharedApplication().setServicesMenu_(services)
     app_menu.addItem_(AppKit.NSMenuItem.separatorItem())
 
     app_menu.addItem_(_item(f"Hide {APP_NAME}", b"hide:", "h"))
@@ -114,7 +114,7 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
     window.addItem_(_item("Close", b"performClose:", "w"))
     window.addItem_(AppKit.NSMenuItem.separatorItem())
     window.addItem_(_item(f"{APP_NAME} Window", b"showMainWindow:", "0", target=target))
-    AppKit.NSApp.setWindowsMenu_(window)
+    AppKit.NSApplication.sharedApplication().setWindowsMenu_(window)
 
-    AppKit.NSApp.setMainMenu_(main)
+    AppKit.NSApplication.sharedApplication().setMainMenu_(main)
     return main

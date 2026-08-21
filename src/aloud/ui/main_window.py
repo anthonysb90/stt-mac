@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Callable
 
 import AppKit
+import Foundation
 import objc
 
 from .. import APP_NAME
@@ -38,7 +39,7 @@ STATE_COLOURS = {
 }
 
 
-class _WindowDelegate(AppKit.NSObject):
+class _WindowDelegate(Foundation.NSObject):
     """Keeps the app alive when the window closes, as a real Mac app does."""
 
     def initWithHandler_(self, handler):
@@ -215,8 +216,11 @@ class MainWindow:
             db_label(self.controller.level)
         ))
         self._keeper.append(target)
-        self._readout_timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        self._readout_timer = AppKit.NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
             1.0 / T.METER_REFRESH_HZ, target, b"invoke:", None, True
+        )
+        Foundation.NSRunLoop.currentRunLoop().addTimer_forMode_(
+            self._readout_timer, Foundation.NSRunLoopCommonModes
         )
 
     def _stop_readout(self) -> None:
@@ -230,7 +234,7 @@ class MainWindow:
 
     def show(self) -> None:
         self.window.makeKeyAndOrderFront_(None)
-        AppKit.NSApp.activateIgnoringOtherApps_(True)
+        AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         if self._pane == HISTORY:
             self.history.reload()
         else:

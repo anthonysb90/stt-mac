@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Callable, Dict, Optional
 
 import AppKit
+import Foundation
 
 from .. import APP_NAME
 from ..core import State
@@ -109,7 +110,7 @@ class MenuBarItem:
 
 
 def _styled(text: str, colour: T.Color, style: T.TextStyle = T.TYPE_BODY):
-    return AppKit.NSAttributedString.alloc().initWithString_attributes_(
+    return Foundation.NSAttributedString.alloc().initWithString_attributes_(
         text,
         {
             AppKit.NSFontAttributeName: T.ns_font(style),

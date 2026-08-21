@@ -16,6 +16,7 @@ import subprocess
 from typing import List, Optional
 
 import AppKit
+import Foundation
 import objc
 
 from ..corrections import RISK_CAUTION, RISK_OK, RISK_RISKY, analyse
@@ -30,7 +31,7 @@ RISK_COLOURS = {
 }
 
 
-class _EditorDelegate(AppKit.NSObject):
+class _EditorDelegate(Foundation.NSObject):
     """Re-analyses the entry on every keystroke."""
 
     def initWithHandler_(self, handler):

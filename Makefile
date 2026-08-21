@@ -36,13 +36,25 @@ icon: ## Regenerate the app icon from the procedural source
 	./scripts/make_icns.sh
 
 .PHONY: dev-app
-dev-app: ## Build the alias .app and launch it
+dev-app: ## Build the .app into dist/ and launch it
 	./scripts/build_app.sh alias
 	open dist/Aloud.app
 
 .PHONY: app
-app: ## Build the standalone, distributable .app
+app: ## Build Aloud.app into dist/
+	./scripts/build_app.sh alias
+
+.PHONY: app-standalone
+app-standalone: ## Build a self-contained .app (experimental — see build_app.sh)
 	./scripts/build_app.sh standalone
+
+.PHONY: diagnose
+diagnose: ## Run the installed app's binary directly to see the real error
+	@echo "==> /Applications/Aloud.app/Contents/MacOS/Aloud"
+	@echo "    A py2app 'Launch error' dialog is a traceback that got swallowed."
+	@echo "    This prints it. Ctrl-C to stop once the app is running."
+	@echo
+	@/Applications/Aloud.app/Contents/MacOS/Aloud || true
 
 .PHONY: install
 install: app ## Build and move Aloud.app into /Applications

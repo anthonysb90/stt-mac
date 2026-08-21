@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 import AppKit
+import Foundation
 import objc
 
 from . import tokens as T
@@ -55,12 +56,15 @@ class LevelMeter(AppKit.NSView):
             return
         self._active = True
         interval = 1.0 / T.METER_REFRESH_HZ
-        self._timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+        # Created unscheduled, then added for *common* modes only: a timer from
+        # scheduledTimer... is already in the default mode, and adding it a
+        # second time does not give it both. Common modes keeps the meter live
+        # while a menu is open or the window is being resized.
+        self._timer = AppKit.NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
             interval, self, b"tick:", None, True
         )
-        # Keep running while a menu is open or the window is being resized.
-        AppKit.NSRunLoop.currentRunLoop().addTimer_forMode_(
-            self._timer, AppKit.NSRunLoopCommonModes
+        Foundation.NSRunLoop.currentRunLoop().addTimer_forMode_(
+            self._timer, Foundation.NSRunLoopCommonModes
         )
 
     @objc.python_method

@@ -1,15 +1,24 @@
 """py2app build definition.
 
-    python setup.py py2app -A     # alias build: fast, links back to this checkout
+    python setup.py py2app -A     # alias build: links back to this checkout
     python setup.py py2app        # standalone build: self-contained .app
 
-The alias build is the one to use day to day. It produces a real .app bundle,
-which is what macOS attaches Accessibility and Microphone grants to, while
-still picking up source edits without a rebuild.
+**The alias build is the one to use**, including for the copy that lives in
+/Applications. It produces a real .app bundle -- which is what macOS attaches
+Accessibility and Microphone grants to -- while running against the virtualenv
+that `bootstrap.sh` set up.
 
-The bundle is architecture-specific unless the Python interpreter it is built
-against is universal2. Building on each Mac is the simplest route -- see
-docs/ARCHITECTURE.md.
+That matters more here than it would for most apps. A standalone build has to
+copy the entire engine stack into the bundle, and the engines are MLX (with its
+Metal shader libraries) or CTranslate2 (with its own native extensions). py2app
+has no recipe for either, so a standalone bundle of this app is a research
+project, and a failed one launches into an ImportError with no traceback.
+
+The trade is that the bundle points at this checkout: move or delete the folder
+and the app stops working. `scripts/build_app.sh` warns about that.
+
+Either way the bundle is architecture-specific unless the interpreter it is
+built against is universal2 -- so build on each Mac. See docs/ARCHITECTURE.md.
 """
 
 import os
@@ -48,11 +57,31 @@ PLIST = {
     "NSHumanReadableCopyright": "",
 }
 
+# py2app finds dependencies by walking `import` statements it can see. Several
+# framework imports here live inside function bodies -- deliberately, because
+# importing AVFoundation or ApplicationServices at module scope costs launch
+# time for something that may never be called -- and modulegraph cannot see
+# those. Naming them explicitly is what keeps a standalone build from launching
+# into an ImportError.
+PYOBJC_FRAMEWORKS = [
+    "objc",
+    "Foundation",
+    "AppKit",
+    "Quartz",
+    "CoreFoundation",
+    "ApplicationServices",   # AXIsProcessTrustedWithOptions
+    "AVFoundation",          # microphone authorisation
+    "CoreMedia",             # AVFoundation's dependency
+]
+
 OPTIONS = {
     "argv_emulation": False,  # would install its own event tap and fight ours
     "plist": PLIST,
     "packages": ["aloud", "sounddevice", "cffi"],
-    "includes": ["_cffi_backend"],
+    "includes": PYOBJC_FRAMEWORKS + [
+        "_cffi_backend",
+        "_sounddevice_data",  # the bundled PortAudio dylib
+    ],
     "excludes": ["tkinter", "test", "unittest", "pydoc_data"],
     "semi_standalone": False,
 }
@@ -68,5 +97,5 @@ setup(
     options={"py2app": OPTIONS},
     setup_requires=["py2app"],
     package_dir={"": "src"},
-    packages=["aloud", "aloud.engines"],
+    packages=["aloud", "aloud.engines", "aloud.ui"],
 )

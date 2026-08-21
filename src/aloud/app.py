@@ -19,6 +19,7 @@ import logging
 import subprocess
 
 import AppKit
+import Foundation
 import objc
 
 from . import APP_NAME, __version__
@@ -34,7 +35,7 @@ from .ui.settings_window import SettingsWindow
 log = logging.getLogger(__name__)
 
 
-class AloudDelegate(AppKit.NSObject):
+class AloudDelegate(Foundation.NSObject):
     """Application delegate, menu target, and controller observer."""
 
     def initWithConfig_(self, config: Config):
@@ -61,7 +62,7 @@ class AloudDelegate(AppKit.NSObject):
                 "toggle": self.controller.toggle,
                 "open_main": lambda: self.main_window.show(),
                 "open_settings": lambda: self.settings.show(),
-                "quit": lambda: AppKit.NSApp.terminate_(None),
+                "quit": lambda: AppKit.NSApplication.sharedApplication().terminate_(None),
             },
         )
         self._hotkey_changed()
@@ -176,11 +177,11 @@ class AloudDelegate(AppKit.NSObject):
 
     def showAbout_(self, _sender):
         ok, detail = self.controller.engine.check()
-        AppKit.NSApp.orderFrontStandardAboutPanelWithOptions_({
+        AppKit.NSApplication.sharedApplication().orderFrontStandardAboutPanelWithOptions_({
             "ApplicationName": APP_NAME,
             "ApplicationVersion": __version__,
             "Version": "",
-            "Credits": AppKit.NSAttributedString.alloc().initWithString_(
+            "Credits": Foundation.NSAttributedString.alloc().initWithString_(
                 f"Push-to-talk dictation.\n\nEngine: {self.controller.engine.label}\n"
                 f"{'' if ok else '⚠ '}{detail}"
             ),
@@ -218,5 +219,5 @@ def run(config: Config) -> int:
     # Keep a strong reference; NSApplication's delegate is weak.
     globals()["_delegate"] = delegate
     app.activateIgnoringOtherApps_(True)
-    AppKit.NSApp.run()
+    app.run()
     return 0

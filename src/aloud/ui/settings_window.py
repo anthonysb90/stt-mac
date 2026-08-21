@@ -54,7 +54,7 @@ class SettingsWindow:
             self._build()
         self.window.center()
         self.window.makeKeyAndOrderFront_(None)
-        AppKit.NSApp.activateIgnoringOtherApps_(True)
+        AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
 
     def _build(self) -> None:
         content = C.stack(

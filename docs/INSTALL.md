@@ -201,6 +201,16 @@ make install
 This builds `Aloud.app` and copies it into `/Applications`. It is a normal Mac
 app: Dock icon, application menu, a window you can close and reopen.
 
+The build ends by starting the bundle once and failing loudly if it cannot —
+so a broken build tells you why here, rather than as a "Launch error" dialog
+later.
+
+> **The app runs against `~/Developer/aloud/.venv`.** Keep that folder where it
+> is; moving or deleting it breaks the app. This is deliberate: the engines are
+> MLX (with its Metal shader libraries) or CTranslate2, and py2app has no recipe
+> for bundling either. `make app-standalone` attempts a self-contained bundle if
+> you want to try, but expect it to fail.
+
 <details>
 <summary>Developing on it instead?</summary>
 
@@ -364,8 +374,23 @@ Aloud → check Settings, then redo step 8 — including quitting and reopening.
 After an ad-hoc-signed rebuild you must remove Aloud from the Accessibility list
 with **−** and add it again; toggling the switch is not enough.
 
+**"Launch error — see the py2app website for debugging launch issues."**
+That dialog is a Python traceback that got thrown away. Get the real one:
+
+```sh
+cd ~/Developer/aloud && make diagnose
+```
+
+That runs the app's binary directly, so the traceback prints in your terminal.
+Send me that output and the fix is usually immediate.
+
 **Nothing happens at all, no menu bar icon.**
-`tail -f ~/Library/Logs/Aloud/aloud.log` and try launching again.
+`make diagnose` first, then `tail -f ~/Library/Logs/Aloud/aloud.log`.
+
+**Is it the bundle or the code?**
+`make run` runs the same app straight from the checkout. If that works and the
+bundle doesn't, it's a packaging problem; if both fail the same way, it's the
+code.
 
 **"parakeet-mlx is not installed" on the M1.**
 Almost always Python: it needs 3.10+ and macOS ships 3.9. Redo step 3, then

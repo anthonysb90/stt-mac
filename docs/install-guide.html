@@ -449,6 +449,10 @@ footer p{margin:0 0 6px;}
       <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
       <pre><span class="p">$</span> make install</pre>
     </div>
+    <p class="why">The build starts the bundle once and fails loudly if it can’t — so a broken build tells you why here, not as a dialog later.</p>
+    <div class="note warn">
+      <p><strong>The app runs against <code>~/Developer/aloud/.venv</code>.</strong> Keep that folder where it is — moving or deleting it breaks the app. That’s deliberate: the engines are MLX (with its Metal shader libraries) or CTranslate2, and py2app has no recipe for bundling either. <code>make app-standalone</code> attempts a self-contained bundle if you want to try, but expect it to fail.</p>
+    </div>
     <p class="why" style="margin-bottom:0">Open it from Launchpad or Spotlight. It will appear in the Dock and in your menu bar as <code>◌</code>.</p>
   </div>
 </article>
@@ -564,10 +568,33 @@ footer p{margin:0 0 6px;}
     </div>
   </details>
 
+  <details open>
+    <summary>“Launch error — see the py2app website for debugging launch issues”</summary>
+    <div class="detail-body">
+      <p>That dialog is a Python traceback that got thrown away. This prints the real one, by running the app’s binary directly in your terminal:</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> make diagnose</pre>
+      </div>
+      <p>Send that output on and the fix is usually immediate.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>Is it the bundle, or the code?</summary>
+    <div class="detail-body">
+      <p><code>make run</code> runs the same app straight from the checkout, skipping the bundle entirely. If that works and the installed app doesn’t, it’s a packaging problem. If both fail the same way, it’s the code.</p>
+      <div class="cmd">
+        <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+        <pre><span class="p">$</span> make run</pre>
+      </div>
+    </div>
+  </details>
+
   <details>
     <summary>Nothing happens at all — no menu bar icon</summary>
     <div class="detail-body">
-      <p>Check the log, then launch again:</p>
+      <p>Run <code>make diagnose</code> first. If that starts cleanly, check the log:</p>
       <div class="cmd">
         <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
         <pre><span class="p">$</span> tail -f ~/Library/Logs/Aloud/aloud.log</pre>

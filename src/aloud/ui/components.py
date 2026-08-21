@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Callable, Optional, Sequence
 
 import AppKit
+import Foundation
 import objc
 
 from . import tokens as T
@@ -29,7 +30,7 @@ from . import tokens as T
 # ---------------------------------------------------------------------------
 
 
-class Action(AppKit.NSObject):
+class Action(Foundation.NSObject):
     """An Objective-C target that forwards to a Python callable."""
 
     def initWithHandler_(self, handler):
@@ -87,7 +88,7 @@ def label(
 
 
 def _apply_tracking(field: AppKit.NSTextField, style: T.TextStyle) -> None:
-    attributed = AppKit.NSMutableAttributedString.alloc().initWithString_(
+    attributed = Foundation.NSMutableAttributedString.alloc().initWithString_(
         field.stringValue()
     )
     attributed.addAttribute_value_range_(
@@ -118,7 +119,7 @@ def highlighted_text(
     corrections in it still has to be readable as a sentence.
     """
     field = selectable_text(text, style)
-    attributed = AppKit.NSMutableAttributedString.alloc().initWithString_(text)
+    attributed = Foundation.NSMutableAttributedString.alloc().initWithString_(text)
     full = (0, attributed.length())
     attributed.addAttribute_value_range_(AppKit.NSFontAttributeName, T.ns_font(style), full)
     attributed.addAttribute_value_range_(
@@ -180,7 +181,7 @@ class TokenBox(AppKit.NSView):
     def drawRect_(self, rect):
         bounds = self.bounds()
         inset = self._border_width / 2.0 if self._border else 0.0
-        frame = AppKit.NSInsetRect(bounds, inset, inset)
+        frame = Foundation.NSInsetRect(bounds, inset, inset)
         path = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             frame, self._radius, self._radius
         )
