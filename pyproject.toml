@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "murmur"
+version = "0.1.0"
+description = "Push-to-talk dictation for macOS"
+requires-python = ">=3.9"
+readme = "README.md"
+dependencies = [
+    "rumps>=0.4.0",
+    "pyobjc-framework-Cocoa>=10.3",
+    "pyobjc-framework-Quartz>=10.3",
+    "pyobjc-framework-AVFoundation>=10.3",
+    "pyobjc-framework-ApplicationServices>=10.3",
+    "sounddevice>=0.4.6",
+]
+
+[project.scripts]
+murmur = "murmur.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

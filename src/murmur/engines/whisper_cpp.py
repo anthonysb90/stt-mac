@@ -1,0 +1,167 @@
+"""Local transcription via the whisper.cpp CLI.
+
+whisper.cpp is the one local option that runs well on *both* of the target
+machines: it uses Metal + the Neural Engine on Apple Silicon and falls back to
+AVX/Accelerate on Intel. Apple-Silicon-only stacks (MLX, Parakeet, CoreML-only
+builds) would leave the Intel Mac without an engine.
+
+We shell out to the `whisper-cli` binary rather than binding libwhisper. That
+keeps the Python side free of a compile step, lets Homebrew or a source build
+supply the binary, and means a crash in the model cannot take the UI down.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from ..paths import MODELS_DIR, VENDOR_DIR
+from .base import EngineError, Transcript, TranscriptionEngine
+
+log = logging.getLogger(__name__)
+
+#: Binary names, newest first. Upstream renamed `main` to `whisper-cli` in 2024.
+BINARY_NAMES = ("whisper-cli", "whisper-cpp", "main")
+
+#: Extra places to look beyond $PATH.
+SEARCH_DIRS = (
+    VENDOR_DIR / "whisper.cpp" / "build" / "bin",
+    VENDOR_DIR / "whisper.cpp",
+    Path("/opt/homebrew/bin"),  # Apple Silicon Homebrew
+    Path("/usr/local/bin"),  # Intel Homebrew
+)
+
+#: whisper.cpp prefixes each segment with a timestamp unless -nt is passed;
+#: strip any that survive (older builds ignore the flag in some modes).
+_TIMESTAMP_RE = re.compile(r"^\s*\[[\d:.\s\->]+\]\s*")
+
+#: Non-speech annotations Whisper emits for silence, music, and noise.
+_ANNOTATION_RE = re.compile(r"[\(\[][A-Z_ ]{2,}[\)\]]|\*[a-z ]+\*")
+
+
+def find_binary(configured: str = "") -> Optional[Path]:
+    """Locate the whisper.cpp CLI: config value, then $PATH, then known dirs."""
+    if configured:
+        candidate = Path(configured).expanduser()
+        return candidate if candidate.is_file() and os.access(candidate, os.X_OK) else None
+
+    for name in BINARY_NAMES:
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+
+    for directory in SEARCH_DIRS:
+        for name in BINARY_NAMES:
+            candidate = directory / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def find_model(configured: str = "") -> Optional[Path]:
+    """Locate a ggml model file, preferring the configured path."""
+    if configured:
+        candidate = Path(configured).expanduser()
+        return candidate if candidate.is_file() else None
+
+    if not MODELS_DIR.is_dir():
+        return None
+    models = sorted(
+        MODELS_DIR.glob("ggml-*.bin"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    return models[0] if models else None
+
+
+def clean_output(raw: str) -> str:
+    """Strip timestamps and non-speech annotations from CLI output."""
+    lines = []
+    for line in raw.splitlines():
+        line = _TIMESTAMP_RE.sub("", line)
+        line = _ANNOTATION_RE.sub("", line)
+        line = line.strip()
+        if line:
+            lines.append(line)
+    return " ".join(lines).strip()
+
+
+class WhisperCppEngine(TranscriptionEngine):
+    name = "whisper_cpp"
+    label = "whisper.cpp (local)"
+
+    def __init__(self, options=None) -> None:
+        super().__init__(options)
+        self.binary = find_binary(self.options.get("binary", ""))
+        self.model = find_model(self.options.get("model", ""))
+
+    # -- contract ----------------------------------------------------------
+
+    def check(self) -> Tuple[bool, str]:
+        # Re-resolve each time: the user may have installed things since startup.
+        self.binary = find_binary(self.options.get("binary", ""))
+        self.model = find_model(self.options.get("model", ""))
+        if self.binary is None:
+            return False, "whisper-cli not found. Run scripts/bootstrap.sh."
+        if self.model is None:
+            return False, f"No ggml-*.bin model in {MODELS_DIR}. Run scripts/fetch_model.sh."
+        return True, f"{self.binary.name} + {self.model.name}"
+
+    def transcribe(self, wav_path: Path) -> Transcript:
+        ok, detail = self.check()
+        if not ok:
+            raise EngineError(detail)
+
+        command = self._build_command(wav_path)
+        log.debug("Running: %s", " ".join(command))
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=self.options.get("timeout", 120),
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise EngineError("whisper.cpp timed out") from exc
+        except OSError as exc:
+            raise EngineError(f"Could not run {self.binary}: {exc}") from exc
+
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip().splitlines()
+            tail = detail[-1] if detail else f"exit code {completed.returncode}"
+            raise EngineError(f"whisper.cpp failed: {tail}")
+
+        return Transcript(
+            text=clean_output(completed.stdout),
+            engine=self.name,
+            duration=time.monotonic() - started,
+            language=self.options.get("language", "en"),
+            meta={"model": self.model.name if self.model else ""},
+        )
+
+    # -- internals ---------------------------------------------------------
+
+    def _build_command(self, wav_path: Path) -> List[str]:
+        assert self.binary is not None and self.model is not None
+        command = [
+            str(self.binary),
+            "-m", str(self.model),
+            "-f", str(wav_path),
+            "--no-timestamps",
+            "--no-prints",
+        ]
+        language = self.options.get("language", "en")
+        if language:
+            command += ["-l", language]
+        threads = int(self.options.get("threads", 0) or 0)
+        if threads > 0:
+            command += ["-t", str(threads)]
+        extra = self.options.get("extra_args") or []
+        command += [str(arg) for arg in extra]
+        return command
