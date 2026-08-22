@@ -167,6 +167,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "key":
         return _cmd_key(args.engine, args.value, args.forget)
 
-    from .app import run
+    # The import is inside the guard on purpose: the failure this exists for
+    # was PyObjC rejecting a class at definition time, so `aloud.app` never
+    # finished importing and nothing inside it could report anything.
+    try:
+        from .app import run
 
-    return run(config)
+        return run(config)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - catching it is the point
+        from .launch import report
+
+        report(exc)
+        return 1

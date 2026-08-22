@@ -114,6 +114,103 @@ def test_every_subpackage_is_declared_for_installation():
     assert actual <= listed, f"setup.py is missing {sorted(actual - listed)}"
 
 
+# ---------------------------------------------------------------------------
+# Selector arity — the bug that produced BadPrototypeError at import time
+# ---------------------------------------------------------------------------
+
+OBJC_BASE_PREFIXES = ("AppKit.NS", "Foundation.NS", "Quartz.", "NS")
+
+
+def _selector_arity(name: str) -> int:
+    """How many arguments PyObjC's selector for this method name takes.
+
+    Underscores become colons; a leading underscore is kept as-is. So `_alert`
+    is a zero-argument selector and `on_error` is a one-argument one — which is
+    why a two-argument `on_error(self, title, message)` is rejected.
+    """
+    return name.lstrip("_").count("_")
+
+
+def _objc_subclasses(tree):
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if any(ast.unparse(base).startswith(OBJC_BASE_PREFIXES) for base in node.bases):
+            yield node
+
+
+def _is_python_method(fn) -> bool:
+    return any(
+        ast.unparse(d) in ("objc.python_method", "python_method")
+        for d in fn.decorator_list
+    )
+
+
+@pytest.mark.parametrize("path", SOURCES, ids=lambda p: p.name)
+def test_exposed_selectors_have_matching_arity(path):
+    """A mismatch is not a runtime error — it stops the class being defined.
+
+    PyObjC raises BadPrototypeError while executing the `class` statement, so
+    the module never imports and the app dies before any of its own error
+    handling exists. It surfaces as a bare "Launch error" with no traceback,
+    which is why this is asserted rather than discovered.
+    """
+    tree = ast.parse(path.read_text())
+    problems = []
+    for klass in _objc_subclasses(tree):
+        for fn in klass.body:
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if _is_python_method(fn) or (fn.name.startswith("__") and fn.name.endswith("__")):
+                continue
+            actual = len([a for a in fn.args.args if a.arg != "self"])
+            expected = _selector_arity(fn.name)
+            if actual != expected:
+                problems.append(
+                    f"{klass.name}.{fn.name}: selector takes {expected} argument(s), "
+                    f"method takes {actual} — add @objc.python_method"
+                )
+    assert not problems, f"{path.name}\n  " + "\n  ".join(problems)
+
+
+@pytest.mark.parametrize("path", SOURCES, ids=lambda p: p.name)
+def test_helper_methods_on_objc_classes_are_marked_as_python(path):
+    """A helper exposed as a selector is a bug waiting for a rename.
+
+    Even when the arity happens to line up, `on_state` becomes the selector
+    `on:state`, which is not something anyone intended. Anything AppKit is not
+    going to call should say so.
+    """
+    tree = ast.parse(path.read_text())
+    leaked = []
+    for klass in _objc_subclasses(tree):
+        for fn in klass.body:
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if _is_python_method(fn) or (fn.name.startswith("__") and fn.name.endswith("__")):
+                continue
+            # A real selector either takes no arguments or ends with `_`.
+            takes_args = any(a.arg != "self" for a in fn.args.args)
+            if takes_args and not fn.name.endswith("_"):
+                leaked.append(f"{klass.name}.{fn.name}")
+    assert not leaked, (
+        f"{path.name}: {leaked} take arguments but do not end with '_', so they are "
+        f"not AppKit callbacks — mark them @objc.python_method"
+    )
+
+
+def test_the_launch_reporter_does_not_import_frameworks_at_module_scope():
+    """It has to be importable when the thing it reports on is not."""
+    tree = ast.parse((SRC / "launch.py").read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] not in FRAMEWORKS, (
+                    f"launch.py imports {alias.name} at module scope; if that is what "
+                    f"broke, the report never gets written"
+                )
+
+
 def test_the_bundle_entry_point_forwards_its_arguments():
     """`--version` from the bundle's binary is the build-time launch check."""
     source = (ROOT / "Aloud.py").read_text()
