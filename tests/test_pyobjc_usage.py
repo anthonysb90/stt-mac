@@ -241,3 +241,81 @@ def test_the_checker_follows_indirect_subclasses():
     tree = ast.parse((SRC / "ui" / "components.py").read_text())
     names = {node.name for node in _objc_subclasses(tree)}
     assert {"TokenBox", "DropZone"} <= names
+
+
+# ---------------------------------------------------------------------------
+# Constructor ordering — the bug that made the window never appear
+# ---------------------------------------------------------------------------
+
+
+def _without_deferred(node):
+    """Child nodes, skipping lambdas and nested functions.
+
+    Code inside a lambda runs later, so reading an attribute there is fine even
+    if it is assigned further down __init__.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        yield child
+        yield from _without_deferred(child)
+
+
+def _self_attrs(node, ctx):
+    for sub in _without_deferred(node):
+        if (isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)
+                and sub.value.id == "self" and isinstance(sub.ctx, ctx)):
+            yield sub.attr
+
+
+def _reachable_methods(node):
+    """Methods this code may run immediately — called, or handed to something."""
+    return set(_self_attrs(node, ast.Load))
+
+
+@pytest.mark.parametrize("path", SOURCES, ids=lambda p: p.name)
+def test_no_constructor_reads_what_it_is_still_assigning(path):
+    """`self.x = self._build_x()` where _build_x reads self.x.
+
+    That shipped, and the failure mode is brutal: the AttributeError is raised
+    inside applicationDidFinishLaunching:, PyObjC swallows it, and the app runs
+    on with no window, no menu bar item and nothing printed.
+
+    Deliberately narrow — only the attribute the statement is *currently*
+    assigning counts. A helper that reads some other not-yet-assigned attribute
+    is usually a callback stored for later, and flagging those is noise.
+    """
+    tree = ast.parse(path.read_text())
+    problems = []
+
+    for klass in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+        methods = {
+            n.name: n for n in klass.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        init = methods.get("__init__")
+        if init is None:
+            continue
+
+        for statement in init.body:
+            being_assigned = set(_self_attrs(statement, ast.Store))
+            if not being_assigned:
+                continue
+
+            reads, seen = set(), set()
+            stack = list(_reachable_methods(statement))
+            while stack:
+                name = stack.pop()
+                if name in seen or name not in methods:
+                    continue
+                seen.add(name)
+                reads |= set(_self_attrs(methods[name], ast.Load))
+                stack.extend(_reachable_methods(methods[name]))
+
+            for attr in sorted(reads & being_assigned):
+                problems.append(
+                    f"{klass.name}.__init__: `self.{attr} = …` runs code that "
+                    f"reads self.{attr} before the assignment lands"
+                )
+
+    assert not problems, f"{path.name}\n  " + "\n  ".join(problems)

@@ -76,6 +76,9 @@ class MainWindow:
         self.meter_readout.widthAnchor().constraintEqualToConstant_(T.METRIC["meter_readout_width"]).setActive_(True)
         self.hotkey_hint = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY)
         self.device_popup = self._build_device_popup()
+        # Populated here, not inside the builder: the popup has to exist before
+        # anything can select an item in it.
+        self._build_device_menu(self.device_popup.menu())
         self.record_button = C.button("Start Dictation", lambda _s: self.controller.toggle(),
                                       self._keeper, prominent=True)
 
@@ -137,15 +140,20 @@ class MainWindow:
         self._select_current_device(menu, current)
 
     def _select_current_device(self, menu, current) -> None:
+        popup = getattr(self, "device_popup", None)
+        if popup is None:  # belt and braces; the builder no longer runs early
+            return
         for item in menu.itemArray():
             if item.state() == AppKit.NSControlStateValueOn:
-                self.device_popup.selectItem_(item)
+                popup.selectItem_(item)
                 return
         if menu.numberOfItems():
-            self.device_popup.selectItemAtIndex_(0)
+            popup.selectItemAtIndex_(0)
 
     def on_devices_changed(self) -> None:
-        self._build_device_menu(self.device_popup.menu())
+        popup = getattr(self, "device_popup", None)
+        if popup is not None:
+            self._build_device_menu(popup.menu())
 
     def _transport(self) -> AppKit.NSView:
         meter_column = C.stack(

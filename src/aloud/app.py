@@ -57,6 +57,23 @@ class AloudDelegate(Foundation.NSObject):
     # -- lifecycle ---------------------------------------------------------
 
     def applicationDidFinishLaunching_(self, _notification):
+        """PyObjC swallows exceptions raised in a delegate callback.
+
+        It logs them somewhere you will not look and lets the run loop carry on,
+        so a failure here produces an app with no window, no menu bar item and
+        no output — indistinguishable from nothing happening at all. Everything
+        goes through the launch reporter instead.
+        """
+        try:
+            self._finish_launching()
+        except BaseException as exc:  # noqa: BLE001 - reporting it is the point
+            from .launch import report
+
+            report(exc)
+            AppKit.NSApplication.sharedApplication().terminate_(None)
+
+    @objc.python_method
+    def _finish_launching(self):
         app_menu.build({}, self)
 
         self.main_window = MainWindow(

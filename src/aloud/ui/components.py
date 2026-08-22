@@ -72,12 +72,18 @@ class MenuRefresher(Foundation.NSObject):
 
 
 def refreshing_menu(builder: Callable, keeper: list) -> AppKit.NSMenu:
-    """An NSMenu whose contents are rebuilt by ``builder(menu)`` on each open."""
+    """An NSMenu rebuilt by ``builder(menu)`` every time it is about to open.
+
+    Deliberately does **not** call the builder now. Doing so ran it while the
+    control being assigned still did not exist, and the resulting AttributeError
+    — raised inside applicationDidFinishLaunching: — took the whole window down
+    silently. Callers populate it once they have finished constructing
+    themselves; see MainWindow._build_device_popup.
+    """
     menu = AppKit.NSMenu.alloc().init()
     refresher = MenuRefresher.alloc().initWithHandler_(builder)
     keeper.append(refresher)
     menu.setDelegate_(refresher)
-    builder(menu)
     return menu
 
 
