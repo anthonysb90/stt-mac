@@ -120,8 +120,11 @@ DEFAULTS: Dict[str, Any] = {
     },
     "feedback": {
         "sounds": True,
-        "start_sound": "Tink",
-        "stop_sound": "Pop",
+        # Chosen to be unmistakably *not* failure sounds: a soft rising bloop
+        # to open, a bright chime to close. "Pop" -- a hollow thunk -- was the
+        # previous stop cue and read as an error. Change them in Settings.
+        "start_sound": "Bottle",
+        "stop_sound": "Glass",
         "error_sound": "Basso",
         "notify_on_error": True,
     },

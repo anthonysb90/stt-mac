@@ -60,8 +60,9 @@ it takes the same path a dictation does. The result opens in its own window,
 copyable and saveable, and is deliberately *not* typed into whatever app you
 had open.
 
-**Settings** (`⌘,`) — the hotkey, the model, and API keys for the cloud
-engines. Paste a key straight in; it is stored where a Dock-launched app can
+**Settings** (`⌘,`) — the hotkey, the model, API keys for the cloud engines,
+and the start/stop sounds (which play as you pick them, since the only way to
+judge a cue is to hear it). Paste a key straight in; it is stored where a Dock-launched app can
 read it, which your shell environment is not. Everything else stays in
 `config.json`, the better editor for a long tail of options.
 

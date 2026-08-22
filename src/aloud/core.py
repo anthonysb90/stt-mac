@@ -417,6 +417,10 @@ class DictationController:
             log.exception("Could not reload the dictionary; keeping the current rules")
         return False
 
+    def reload_feedback(self) -> None:
+        """Apply a sound change from Settings immediately."""
+        self.feedback.update(self.config.get("feedback", {}))
+
     def reload_rules(self) -> None:
         """Recompile after the dictionary is edited, from the UI or the file."""
         self._ruleset = corrections.ruleset_for(self.dictionary)

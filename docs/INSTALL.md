@@ -326,6 +326,18 @@ loading. After that it stays resident.
 
 ---
 
+## Sounds
+
+The start and stop cues are the only feedback you get while you are looking at
+another app, so they are worth setting once. **Settings → Sounds** picks them
+from everything your Mac has, and plays each one as you select it.
+
+Defaults are **Bottle** (soft rising bloop) to open and **Glass** (bright
+chime) to close. Basso, Funk and Sosumi are alert sounds — they will read as
+something going wrong.
+
+---
+
 ## Step 10 — Keep it running
 
 Aloud lives in the menu bar as a microphone icon. Closing the window does not

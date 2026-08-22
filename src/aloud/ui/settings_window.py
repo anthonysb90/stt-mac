@@ -15,7 +15,7 @@ from typing import Optional
 
 import AppKit
 
-from .. import APP_NAME, engines, secrets
+from .. import APP_NAME, engines, feedback, secrets
 from ..hotkey import available_keys, describe
 from . import components as C
 from . import tokens as T
@@ -50,6 +50,8 @@ class SettingsWindow:
         self._key_status = None
         self._key_buttons = None
         self._key_rows = None
+        self._start_popup = None
+        self._stop_popup = None
 
     # -- presentation ------------------------------------------------------
 
@@ -68,6 +70,8 @@ class SettingsWindow:
                 self._model_section(),
                 C.separator(),
                 self._credentials_section(),
+                C.separator(),
+                self._sounds_section(),
             ],
             spacing=T.INSET["section"],
         )
@@ -198,6 +202,68 @@ class SettingsWindow:
         self._model_field.setStringValue_(self._current_model())
         self._model_field.setEnabled_(name != "mock")
         self._model_hint.setStringValue_(MODEL_HINTS.get(name, ""))
+
+    # -- sounds ------------------------------------------------------------
+
+    def _sounds_section(self) -> AppKit.NSView:
+        """Start and stop cues.
+
+        These are the only feedback you get while looking at another app, so
+        they matter more than their size suggests. Which one reads as cheerful
+        rather than as a failure is entirely subjective, so the picker plays
+        each sound as you select it rather than making you guess from a name.
+        """
+        names = [n for n in feedback.available_sounds()] or ["Bottle", "Glass"]
+        labels = [feedback.describe(name) for name in names]
+
+        toggle = C.checkbox(
+            "Play a sound when recording starts and stops",
+            bool(self.config.get("feedback.sounds", True)),
+            lambda sender: self._set_sounds_enabled(
+                sender.state() == AppKit.NSControlStateValueOn
+            ),
+            self._keeper,
+        )
+
+        self._start_popup = C.popup(
+            labels,
+            feedback.describe(str(self.config.get("feedback.start_sound", "Bottle"))),
+            lambda sender: self._set_sound("start_sound", names[sender.indexOfSelectedItem()]),
+            self._keeper,
+        )
+        self._stop_popup = C.popup(
+            labels,
+            feedback.describe(str(self.config.get("feedback.stop_sound", "Glass"))),
+            lambda sender: self._set_sound("stop_sound", names[sender.indexOfSelectedItem()]),
+            self._keeper,
+        )
+
+        hint = C.label(
+            "Choosing a sound plays it. Basso, Funk and Sosumi are alert sounds — "
+            "they will read as something going wrong.",
+            T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True,
+        )
+
+        return self._section("Sounds", [
+            toggle,
+            self._field_row("Start", self._start_popup),
+            self._field_row("Stop", self._stop_popup),
+            hint,
+        ])
+
+    def _set_sounds_enabled(self, enabled: bool) -> None:
+        self.config.set("feedback.sounds", enabled)
+        self.config.save()
+        self.controller.reload_feedback()
+        if enabled:
+            feedback.play(str(self.config.get("feedback.start_sound", "Bottle")))
+
+    def _set_sound(self, key: str, name: str) -> None:
+        self.config.set(f"feedback.{key}", name)
+        self.config.save()
+        self.controller.reload_feedback()
+        # Play it now: the whole point is hearing it before you commit.
+        feedback.play(name)
 
     # -- credentials -------------------------------------------------------
 
