@@ -76,6 +76,14 @@ info "Installing Python dependencies (this pulls in the ML runtime; give it a mi
 ./.venv/bin/python -m pip install --quiet --upgrade pip
 ./.venv/bin/python -m pip install -r requirements-dev.txt
 
+# Install the package itself, editable. Without this the code only imports
+# when PYTHONPATH points at src/ -- which the Makefile does and a bare
+# `.venv/bin/python -m aloud` does not, so the same command works or fails
+# depending on how you got there. Editable, so edits still take effect
+# immediately.
+info "Linking the package into the virtualenv"
+./.venv/bin/python -m pip install --quiet -e .
+
 # --- 5. whisper.cpp, the offline fallback (opt-in) -------------------------
 if [ "$WITH_WHISPER_CPP" = "1" ]; then
   info "Installing the whisper.cpp fallback"

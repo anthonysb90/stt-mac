@@ -127,12 +127,15 @@ make icon        # regenerate the app icon
 The CLI also works standalone, which is handy for isolating problems:
 
 ```sh
-.venv/bin/python -m aloud doctor          # which engine is active, and why
-.venv/bin/python -m aloud warm            # pre-load the model
-.venv/bin/python -m aloud key deepgram    # store a cloud API key
-.venv/bin/python -m aloud transcribe x.wav
-.venv/bin/python -m aloud history -n 20
+.venv/bin/aloud doctor          # which engine is active, and why
+.venv/bin/aloud warm            # pre-load the model
+.venv/bin/aloud key deepgram    # store a cloud API key
+.venv/bin/aloud transcribe x.wav
+.venv/bin/aloud history -n 20
 ```
+
+`bootstrap.sh` installs the package into the virtualenv, which is what makes
+`aloud` a command. If you set this up before that existed, `make link` adds it.
 
 ## Configuration
 

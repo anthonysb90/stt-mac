@@ -421,7 +421,7 @@ only by you.
 > read.
 
 There is a command-line equivalent if you prefer it —
-`.venv/bin/python -m aloud key deepgram` — but nothing needs it.
+`.venv/bin/aloud key deepgram` — but nothing needs it.
 
 Aloud turns off its own filler-stripping and punctuation when Deepgram is
 active, so the two never fight over the same text. Your Dictionary corrections

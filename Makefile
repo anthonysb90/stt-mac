@@ -17,6 +17,11 @@ everything: ## One command: dependencies, model, build, install
 bootstrap: ## Install toolchain, dependencies, whisper.cpp, and a model
 	./scripts/bootstrap.sh
 
+.PHONY: link
+link: ## Install the package into .venv so `aloud` works without PYTHONPATH
+	$(PYTHON) -m pip install -e .
+	@echo "==> .venv/bin/aloud is now available"
+
 .PHONY: run
 run: ## Run from the terminal (permissions attach to the terminal app)
 	$(PYTHON) -m aloud run
