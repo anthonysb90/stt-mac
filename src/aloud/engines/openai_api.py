@@ -53,16 +53,18 @@ class OpenAIEngine(TranscriptionEngine):
     name = "openai"
     label = "OpenAI API (cloud)"
     needs_api_key = True
+    api_key_env_default = "OPENAI_API_KEY"
     supports_bias = True
 
     # -- contract ----------------------------------------------------------
 
     def check(self) -> Tuple[bool, str]:
-        env_var = str(self.options.get("api_key_env", "OPENAI_API_KEY"))
+        env_var = self.api_key_env
         if not self._api_key():
             return False, (
-                f"No API key (${env_var} unset). Run `aloud key openai` to store "
-                "one — a Dock-launched app cannot see your shell environment."
+                f"No API key (${env_var} unset). Paste one under Credentials in "
+                "Settings, or run `aloud key openai` — a Dock-launched app "
+                "cannot see your shell environment."
             )
         source = describe_source(env_var, self.name)
         return True, f"{self.options.get('model', 'whisper-1')} via {self._base_url()} · key from {source}"
@@ -126,4 +128,4 @@ class OpenAIEngine(TranscriptionEngine):
         return str(self.options.get("base_url", "https://api.openai.com/v1")).rstrip("/")
 
     def _api_key(self) -> str:
-        return read_key(str(self.options.get("api_key_env", "OPENAI_API_KEY")), self.name)
+        return read_key(self.api_key_env, self.name)

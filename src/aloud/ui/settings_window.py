@@ -1,12 +1,15 @@
-"""Settings: the hotkey, and the model.
+"""Settings: the hotkey, the model, API keys, and the start/stop sounds.
 
-Deliberately two sections and no more. Everything else in ``config.json``
-stays there — a preferences window that mirrors every key is a window nobody
-finishes reading, and the file is already the better editor for the long tail.
+Four sections and no more. Everything else in ``config.json`` stays there — a
+preferences window that mirrors every key is a window nobody finishes reading,
+and the file is already the better editor for the long tail.
 
 Changes apply immediately. There is no Save button because there is nothing to
 save: the hotkey is reinstalled and the engine reselected as you change them,
 which is also the only way to find out whether your new hotkey actually works.
+The one exception is an API key, which needs an explicit Save — a field that
+committed a half-pasted secret on every keystroke would be a nuisance, and the
+button is also where "did that take?" gets answered.
 """
 
 from __future__ import annotations
@@ -46,10 +49,8 @@ class SettingsWindow:
         self._model_field = None
         self._model_hint = None
         self._engine_detail = None
-        self._key_field = None
-        self._key_status = None
-        self._key_buttons = None
-        self._key_rows = None
+        #: name -> {"field", "status", "remove"}, one per key-taking service.
+        self._key_rows: dict = {}
         self._start_popup = None
         self._stop_popup = None
 
@@ -63,6 +64,14 @@ class SettingsWindow:
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
 
     def _build(self) -> None:
+        """Lay the sections out inside a scroller.
+
+        The previous version pinned the sections directly to a fixed-height
+        window, so anything past the bottom edge was simply not reachable --
+        which is how the Model section ended up clipped off the top. Content
+        that outgrows the window has to scroll; a settings window that silently
+        hides half its settings is worse than one that is a bit tall.
+        """
         content = C.stack(
             [
                 self._hotkey_section(),
@@ -76,22 +85,41 @@ class SettingsWindow:
             spacing=T.INSET["section"],
         )
         content.setAlignment_(AppKit.NSLayoutAttributeLeading)
+        # Leading alignment lets an arranged view keep its intrinsic width, and
+        # a wrapping label's intrinsic width is "one very long line". Pinning
+        # each section to the stack is what gives the labels a width to wrap
+        # against, now that the stack itself is sized by the window.
+        for section in content.arrangedSubviews():
+            section.widthAnchor().constraintEqualToAnchor_(
+                content.widthAnchor()
+            ).setActive_(True)
 
         window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             ((0, 0), (T.METRIC["settings_width"], T.METRIC["settings_height"])),
-            AppKit.NSWindowStyleMaskTitled | AppKit.NSWindowStyleMaskClosable,
+            AppKit.NSWindowStyleMaskTitled
+            | AppKit.NSWindowStyleMaskClosable
+            | AppKit.NSWindowStyleMaskMiniaturizable
+            | AppKit.NSWindowStyleMaskResizable,
             AppKit.NSBackingStoreBuffered,
             False,
         )
         window.setTitle_(f"{APP_NAME} Settings")
         window.setReleasedWhenClosed_(False)
+        window.setContentMinSize_(
+            (T.METRIC["settings_width_min"], T.METRIC["settings_height_min"])
+        )
+        window.setFrameAutosaveName_(f"{APP_NAME}SettingsWindow")
 
+        scroller = C.scroller(C.pad(content, T.INSET["window"]))
         host = AppKit.NSView.alloc().init()
         window.setContentView_(host)
-        C.pad(content, T.INSET["window"], container=host)
-        content.widthAnchor().constraintEqualToConstant_(
-            T.METRIC["settings_width"] - 2 * T.INSET["window"]
-        ).setActive_(True)
+        host.addSubview_(scroller)
+        AppKit.NSLayoutConstraint.activateConstraints_([
+            scroller.leadingAnchor().constraintEqualToAnchor_(host.leadingAnchor()),
+            scroller.trailingAnchor().constraintEqualToAnchor_(host.trailingAnchor()),
+            scroller.topAnchor().constraintEqualToAnchor_(host.topAnchor()),
+            scroller.bottomAnchor().constraintEqualToAnchor_(host.bottomAnchor()),
+        ])
 
         self.window = window
 
@@ -268,76 +296,108 @@ class SettingsWindow:
     # -- credentials -------------------------------------------------------
 
     def _credentials_section(self) -> AppKit.NSView:
-        """Where a cloud engine's API key gets pasted.
+        """A key field for every service that takes one, active or not.
 
-        Storing it here rather than in the environment is not a convenience: a
-        GUI app launched from the Dock does not inherit your shell, so an
-        exported variable works in a terminal and silently fails in the app.
+        Showing only the running engine's field was the bug: on a Mac happily
+        transcribing with faster-whisper there was no field at all, so there
+        was no way to put a Deepgram key in without first switching to an
+        engine that could not start for want of that very key. Keys are stored
+        per service and read when that service runs, so there is no reason to
+        make storing one conditional on using it.
+
+        Storing them here rather than in the environment is not a convenience
+        either: an app launched from the Dock does not inherit your shell, so
+        an exported variable works in a terminal and silently fails in the app.
         """
-        self._key_field = C.secure_field(
-            "Paste your API key", lambda _s: self._save_key(), self._keeper
-        )
-        self._key_status = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True)
+        self._key_rows = {}
+        blocks = [
+            self._credentials_block(name, engines.REGISTRY[name])
+            for name in engines.names()
+            if engines.REGISTRY[name].needs_api_key
+        ]
 
-        save = C.button("Save Key", lambda _s: self._save_key(), self._keeper)
-        clear = C.button("Remove", lambda _s: self._clear_key(), self._keeper)
-        self._key_buttons = C.stack(
-            [C.spacer(), clear, save], vertical=False, spacing=T.SPACE["md"]
+        note = C.label(
+            "Keys are kept in ~/Library/Application Support/Aloud/keys, readable "
+            "only by you. Store one whenever you like — a service is only used "
+            "once you pick it as the Engine above.",
+            T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True,
         )
 
-        self._key_rows = C.stack(
-            [self._field_row("API key", self._key_field), self._key_buttons, self._key_status],
-            spacing=T.SPACE["lg"],
-        )
-        self._key_rows.setAlignment_(AppKit.NSLayoutAttributeLeading)
-
-        section = self._section("Credentials", [self._key_rows])
+        section = self._section("Credentials", blocks + [note])
         self._refresh_credentials()
         return section
 
+    def _credentials_block(self, name: str, engine_class) -> AppKit.NSView:
+        """One service: a masked field, Save and Remove, and where it stands."""
+        field = C.secure_field(
+            "Paste your API key",
+            lambda _s, n=name: self._save_key(n),
+            self._keeper,
+        )
+        status = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True)
+        save = C.button("Save Key", lambda _s, n=name: self._save_key(n), self._keeper)
+        remove = C.button("Remove", lambda _s, n=name: self._clear_key(n), self._keeper)
+        buttons = C.stack(
+            [C.spacer(), remove, save], vertical=False, spacing=T.SPACE["md"]
+        )
+        field_row = self._field_row("API key", field)
+
+        block = C.stack(
+            [C.label(engine_class.label, T.TYPE_TITLE_3), field_row, buttons, status],
+            spacing=T.SPACE["md"],
+        )
+        block.setAlignment_(AppKit.NSLayoutAttributeLeading)
+        for row in (field_row, buttons, status):
+            row.widthAnchor().constraintEqualToAnchor_(block.widthAnchor()).setActive_(True)
+
+        self._key_rows[name] = {"field": field, "status": status, "remove": remove}
+        return block
+
+    def _key_env(self, name: str) -> str:
+        """The variable this service reads, honouring a config override."""
+        options = self.config.engine_options(name)
+        return str(
+            options.get("api_key_env", "") or engines.REGISTRY[name].api_key_env_default
+        )
+
     def _refresh_credentials(self) -> None:
-        engine = self.controller.engine
-        needed = bool(getattr(engine, "needs_api_key", False))
-        for view in (self._key_field, self._key_buttons):
-            view.setHidden_(not needed)
+        active = self._active_engine_name()
+        for name, row in self._key_rows.items():
+            source = secrets.describe_source(self._key_env(name), name)
+            stored = source != "not set"
+            row["remove"].setEnabled_(stored)
+            row["field"].setStringValue_("")
 
-        if not needed:
-            self._key_status.setStringValue_(
-                f"{engine.label} runs on this Mac and needs no key."
-            )
-            self._key_status.setTextColor_(T.ns_color(T.TEXT_TERTIARY))
-            return
+            if stored:
+                text = f"Key stored — read from {source}."
+                color = T.STATUS_SUCCESS
+            else:
+                text = "No key stored yet. Paste one above and press Save Key."
+                color = T.TEXT_TERTIARY if name != active else T.STATUS_WARNING
+            if name == active:
+                text += " This is the engine currently in use."
+            row["status"].setStringValue_(text)
+            row["status"].setTextColor_(T.ns_color(color))
 
-        source = secrets.describe_source(engine.api_key_env, engine.name)
-        self._key_field.setStringValue_("")
-        if source == "not set":
-            self._key_status.setStringValue_(
-                f"No key stored for {engine.label}. Paste one above and press Save."
-            )
-            self._key_status.setTextColor_(T.ns_color(T.STATUS_WARNING))
-        else:
-            self._key_status.setStringValue_(f"A key is stored — read from {source}.")
-            self._key_status.setTextColor_(T.ns_color(T.STATUS_SUCCESS))
-
-    def _save_key(self) -> None:
-        engine = self.controller.engine
-        value = self._key_field.stringValue().strip()
+    def _save_key(self, name: str) -> None:
+        row = self._key_rows[name]
+        value = row["field"].stringValue().strip()
         if not value:
-            self._key_status.setStringValue_("Nothing to save — the field is empty.")
-            self._key_status.setTextColor_(T.ns_color(T.STATUS_WARNING))
+            row["status"].setStringValue_("Nothing to save — the field is empty.")
+            row["status"].setTextColor_(T.ns_color(T.STATUS_WARNING))
             return
-        secrets.store_key(engine.name, value)
-        self._key_field.setStringValue_("")
-        # Rebuild so the engine picks the key up without a restart.
-        self.controller.use_engine(str(self.config.get("engine", engines.AUTO)))
-        self._refresh_model_section()
-        self._refresh_credentials()
+        secrets.store_key(name, value)
+        self._after_key_change(name)
 
-    def _clear_key(self) -> None:
-        engine = self.controller.engine
-        secrets.forget_key(engine.name)
-        self.controller.use_engine(str(self.config.get("engine", engines.AUTO)))
-        self._refresh_model_section()
+    def _clear_key(self, name: str) -> None:
+        secrets.forget_key(name)
+        self._after_key_change(name)
+
+    def _after_key_change(self, name: str) -> None:
+        """Re-read the key without a restart, but only where it can matter."""
+        if name == self._active_engine_name():
+            self.controller.use_engine(str(self.config.get("engine", engines.AUTO)))
+            self._refresh_model_section()
         self._refresh_credentials()
 
     # -- layout helpers ----------------------------------------------------

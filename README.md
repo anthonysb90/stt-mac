@@ -184,9 +184,16 @@ the clipboard), `clipboard` (copy only).
 | `mock` | Fixed text, for testing the loop without a model |
 
 Cloud engines upload your audio, so they are never selected automatically.
-Store their keys with `aloud key deepgram` — an app launched from the Dock does
-not inherit your shell environment, so an exported variable would work in
-Terminal and silently fail in the app.
+
+Paste their keys into **Settings → Credentials** (⌘,). Every service that takes
+a key gets its own field there whether or not it is the engine you are running,
+so you can store a Deepgram key while transcribing locally and switch over when
+you want to. `aloud key deepgram` does the same thing from a terminal.
+
+Keys land in `~/Library/Application Support/Aloud/keys`, readable only by you.
+They are not read from your shell: an app launched from the Dock does not
+inherit your environment, so an exported variable would work in Terminal and
+silently fail in the app.
 
 `auto` skips any engine that isn't ready and falls through to the next. An
 engine you name explicitly is always used, even if it's broken — the menu bar

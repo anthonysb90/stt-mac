@@ -83,6 +83,7 @@ class DeepgramEngine(TranscriptionEngine):
     name = "deepgram"
     label = "Deepgram (cloud)"
     needs_api_key = True
+    api_key_env_default = "DEEPGRAM_API_KEY"
     supports_bias = True
     #: Deepgram punctuates, capitalises and strips fillers server-side, so the
     #: local post-processing stage stands down for those steps.
@@ -93,8 +94,9 @@ class DeepgramEngine(TranscriptionEngine):
     def check(self) -> Tuple[bool, str]:
         if not self._api_key():
             return False, (
-                "No Deepgram API key. Run `aloud key deepgram` to store one — "
-                "a Dock-launched app cannot see your shell environment."
+                "No Deepgram API key. Paste one under Credentials in Settings, "
+                "or run `aloud key deepgram` — a Dock-launched app cannot see "
+                "your shell environment, so exporting it is not enough."
             )
         detail = f"{self._model()} · {self._cleanup_summary()} · key from {self.key_source()}"
         if not self._keyterms_supported():
@@ -199,7 +201,10 @@ class DeepgramEngine(TranscriptionEngine):
     def _explain(exc: urllib.error.HTTPError) -> str:
         body = exc.read().decode("utf-8", "replace")[:400]
         if exc.code == 401:
-            return "Deepgram rejected the API key (401). Re-run `aloud key deepgram`."
+            return (
+                "Deepgram rejected the API key (401). Replace it under "
+                "Credentials in Settings, or re-run `aloud key deepgram`."
+            )
         if exc.code == 402:
             return "Deepgram reports no credit remaining (402)."
         if exc.code == 429:
@@ -221,12 +226,10 @@ class DeepgramEngine(TranscriptionEngine):
         return str(self.options.get("model") or DEFAULT_MODEL)
 
     def _api_key(self) -> str:
-        return read_key(str(self.options.get("api_key_env", "DEEPGRAM_API_KEY")), self.name)
+        return read_key(self.api_key_env, self.name)
 
     def key_source(self) -> str:
-        return describe_source(
-            str(self.options.get("api_key_env", "DEEPGRAM_API_KEY")), self.name
-        )
+        return describe_source(self.api_key_env, self.name)
 
     def _cleanup_summary(self) -> str:
         """Which cleanup features are on, for the menu and `aloud doctor`."""

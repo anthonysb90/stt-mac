@@ -41,6 +41,12 @@ class TranscriptionEngine(abc.ABC):
     #: Whether this backend needs an API key. Drives the credentials field in
     #: Settings, so a key can be pasted in rather than stored from a terminal.
     needs_api_key: bool = False
+    #: The environment variable this backend reads when config names no other.
+    #: A *class* attribute rather than only a property default, so Settings can
+    #: list every backend that wants a key without constructing any of them --
+    #: constructing a local backend loads a model, and opening Settings should
+    #: not do that.
+    api_key_env_default: str = ""
     #: Whether the backend already punctuates, capitalises, strips fillers and
     #: honours spoken punctuation. When true the local post-processing steps
     #: that would duplicate that work are skipped.
@@ -88,4 +94,4 @@ class TranscriptionEngine(abc.ABC):
     @property
     def api_key_env(self) -> str:
         """The environment variable this backend reads, if any."""
-        return str(self.options.get("api_key_env", ""))
+        return str(self.options.get("api_key_env", "") or self.api_key_env_default)
