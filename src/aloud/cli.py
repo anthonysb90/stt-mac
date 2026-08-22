@@ -32,6 +32,9 @@ def _cmd_doctor(config: Config) -> int:
     print(f"  log         {LOG_FILE}")
     print(f"  hotkey      {config.get('hotkey.mode')} {describe(config.get('hotkey.key'))}")
     print(f"  permissions {permissions.summary()}")
+    print("  dock icon   "
+          + ("shown" if config.get("interface.dock_icon", True)
+             else "hidden (menu bar only)"))
     if configured == engines.AUTO:
         print(f"  engine      auto -> {selected.name}"
               f"  (order: {' > '.join(engines.preferences())})")

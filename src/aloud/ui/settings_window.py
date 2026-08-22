@@ -1,6 +1,6 @@
-"""Settings: the hotkey, the model, API keys, and the start/stop sounds.
+"""Settings: the hotkey, the model, API keys, sounds, and the Dock icon.
 
-Four sections and no more. Everything else in ``config.json`` stays there — a
+Five sections and no more. Everything else in ``config.json`` stays there — a
 preferences window that mirrors every key is a window nobody finishes reading,
 and the file is already the better editor for the long tail.
 
@@ -21,6 +21,7 @@ import AppKit
 from .. import APP_NAME, engines, feedback, secrets
 from ..hotkey import available_keys, describe
 from . import components as C
+from . import dock
 from . import tokens as T
 
 MODE_LABELS = {"hold": "Hold to talk", "toggle": "Tap to start and stop"}
@@ -81,6 +82,8 @@ class SettingsWindow:
                 self._credentials_section(),
                 C.separator(),
                 self._sounds_section(),
+                C.separator(),
+                self._appearance_section(),
             ],
             spacing=T.INSET["section"],
         )
@@ -399,6 +402,45 @@ class SettingsWindow:
             self.controller.use_engine(str(self.config.get("engine", engines.AUTO)))
             self._refresh_model_section()
         self._refresh_credentials()
+
+    # -- appearance --------------------------------------------------------
+
+    def _appearance_section(self) -> AppKit.NSView:
+        """Dock icon on or off — the difference between an app and a utility.
+
+        Worth spelling out rather than labelling "Show in Dock" and leaving it
+        there: turning it off also removes the application menu, so ⌘, and ⌘Q
+        stop working and the menu bar item becomes the only way in. That is the
+        deal people want when they ask for this, but only if they know it is
+        the deal.
+        """
+        toggle = C.checkbox(
+            f"Show {APP_NAME} in the Dock",
+            bool(self.config.get("interface.dock_icon", True)),
+            lambda sender: self._set_dock_icon(
+                sender.state() == AppKit.NSControlStateValueOn
+            ),
+            self._keeper,
+        )
+        hint = C.label(
+            "Turn this off and Aloud runs from the menu bar alone — no Dock "
+            "icon, no app switcher, and no application menu, so ⌘, and ⌘Q stop "
+            "working. Everything stays reachable from the menu bar icon: Open, "
+            "Settings and Quit are all in that menu. Takes effect immediately.",
+            T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True,
+        )
+        return self._section("Appearance", [toggle, hint])
+
+    def _set_dock_icon(self, visible: bool) -> None:
+        self.config.set("interface.dock_icon", visible)
+        self.config.save()
+        dock.apply(visible)
+        # Hiding the Dock icon deactivates the app, which sends this window
+        # behind whatever is underneath. Bring it back so the checkbox you just
+        # ticked is still in front of you.
+        if self.window is not None:
+            self.window.makeKeyAndOrderFront_(None)
+            AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
 
     # -- layout helpers ----------------------------------------------------
 

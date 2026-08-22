@@ -13,8 +13,9 @@ A local-first take on [Wispr Flow](https://wisprflow.ai/features). Transcription
 runs on your machine — Parakeet on Apple Silicon, faster-whisper on Intel — so
 nothing leaves it unless you switch to the cloud engine on purpose.
 
-> **Status: built, not yet run on hardware.** Everything is wired and covered by
-> tests, but no part of it has executed on a Mac — see
+> **Status: running on Intel, not yet on Apple Silicon.** The x86_64 machine
+> dictates, transcribes files and installs as an app. The arm64 path — Parakeet
+> on MLX — is written and covered by tests but has not been run on hardware; see
 > [Verification status](#verification-status).
 
 ---
@@ -41,7 +42,27 @@ Requirements: macOS 11+, Xcode **Command Line Tools** (not Xcode), and Python
 3.10+ on Apple Silicon / 3.9+ on Intel. Bootstrap checks all three and tells you
 what to do.
 
+**On Apple Silicon**, macOS still ships Python 3.9 and `parakeet-mlx` needs
+3.10+, so point bootstrap at a newer interpreter and let it build the
+virtualenv from that one:
+
+```sh
+brew install python@3.12 ffmpeg
+PYTHON_BIN=$(brew --prefix)/bin/python3.12 ./scripts/bootstrap.sh
+```
+
+Everything after that is identical. `aloud doctor` names the Python version,
+whether `parakeet-mlx` imported, and whether ffmpeg is on `PATH` — Parakeet
+decodes audio with it, so it is a hard requirement there and not on Intel.
+
 ## The app
+
+**Menu bar only.** Settings → Appearance → uncheck *Show Aloud in the Dock*, or
+tick *Show in Dock* off in the menu bar icon's own menu. Aloud then has no Dock
+icon, no place in the app switcher and — this is the part worth knowing — no
+application menu, so `⌘,` and `⌘Q` stop working. The menu bar icon carries
+Open, Settings and Quit, so nothing is lost. It takes effect immediately, and
+with the Dock icon off the main window no longer opens at launch.
 
 **Main window** — `⌘1` History, `⌘2` Dictionary.
 
@@ -231,21 +252,24 @@ rules, the latency budget, and who owns cleanup.
 
 ## Verification status
 
-Written and tested on Linux, which means:
+* **Run on Intel (x86_64, macOS 26).** The hotkey and its event tap, PortAudio
+  capture, faster-whisper, the AppKit views, the py2app alias build, ad-hoc
+  signing and the TCC prompts all work on hardware.
+* **Not yet run on Apple Silicon.** Parakeet on MLX is the only substantially
+  different piece there — a different engine, a different Python floor (3.10+),
+  and ffmpeg as a hard dependency. `aloud doctor` names whichever of those is
+  missing before you hit it.
+* **Never run anywhere** — live Deepgram and OpenAI calls. Both are covered by
+  tests against a recorded request shape, not against the services.
 
-* **Verified** — 293 unit tests pass, covering the hotkey state machine, the
-  correction engine's matching and risk analysis, the Dictionary file format,
-  per-architecture engine selection, Deepgram's request shaping, key lookup,
-  cleanup ownership, the design tokens' own contrast and scale rules, and the
-  full press → transcribe → correct → deliver path. A structural test asserts no
-  view hard-codes a colour, font, or size. Every module compiles; every shell
-  script passes `bash -n`.
-* **Not yet verified** — anything needing real hardware: the Quartz event tap
-  against a physical keyboard, PortAudio capture, **every AppKit view**, loading
-  Parakeet or faster-whisper, live Deepgram calls, the py2app build, code
-  signing, and TCC prompts. The AppKit code follows documented API but has not
-  been run — expect to shake out layout and constraint issues on the first
-  launch. Start with `make doctor`, then `make warm`, then `make install`.
+Off-hardware the suite covers the hotkey state machine, the correction engine's
+matching and risk analysis, the Dictionary file format, per-architecture engine
+selection, Deepgram's request shaping, key lookup, cleanup ownership, the design
+tokens' own contrast and scale rules, and the full press → transcribe → correct
+→ deliver path. Structural tests assert no view hard-codes a colour, font or
+size, and guard the PyObjC mistakes that only surface at launch — selector
+arity, `NSApp` misuse, constructor ordering. Every module compiles; every shell
+script passes `bash -n`.
 
 ## Troubleshooting
 

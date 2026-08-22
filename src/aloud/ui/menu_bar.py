@@ -21,6 +21,7 @@ from .. import audio
 from ..core import State
 from ..hotkey import describe
 from . import components as C
+from . import dock
 from . import tokens as T
 
 #: SF Symbols, drawn as *template* images so macOS tints them itself — black on
@@ -70,8 +71,33 @@ class MenuBarItem:
         self.status_item = self._entry("Idle", None)
         self.hotkey_item = self._entry("", None)
         self.toggle_item = self._entry("Start Dictation", handlers["toggle"])
+        self.dock_item = self._entry("Show in Dock", self._toggle_dock)
+        # With the Dock icon hidden this menu is the entire application, so its
+        # checkmarks have to be right every time it opens -- Settings can change
+        # the same value from the other side.
+        self._refresher = C.MenuRefresher.alloc().initWithHandler_(self._refresh)
+        self._keeper.append(self._refresher)
+        self.menu.setDelegate_(self._refresher)
         self._rebuild()
         self.set_state(State.IDLE)
+
+    # -- the Dock icon -----------------------------------------------------
+
+    def _toggle_dock(self) -> None:
+        visible = not bool(self.controller.config.get("interface.dock_icon", True))
+        self.controller.config.set("interface.dock_icon", visible)
+        self.controller.config.save()
+        dock.apply(visible)
+        # No need to tick the item here: clicking it dismisses the menu, and
+        # the delegate rebuilds the checkmarks the next time it opens.
+
+    def _refresh(self, _menu=None) -> None:
+        """Bring the checkmarks up to date just before the menu is shown."""
+        self.dock_item.setState_(
+            AppKit.NSControlStateValueOn
+            if bool(self.controller.config.get("interface.dock_icon", True))
+            else AppKit.NSControlStateValueOff
+        )
 
     # -- construction ------------------------------------------------------
 
@@ -124,6 +150,7 @@ class MenuBarItem:
         self.menu.addItem_(self._microphone_item())
         self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self.menu.addItem_(self._entry(f"Open {APP_NAME}", self.handlers["open_main"]))
+        self.menu.addItem_(self.dock_item)
         self.menu.addItem_(self._entry("Settings…", self.handlers["open_settings"]))
         self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self.menu.addItem_(self._entry(f"Quit {APP_NAME}", self.handlers["quit"]))

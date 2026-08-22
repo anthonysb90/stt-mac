@@ -30,6 +30,7 @@ from .core import DictationController, State
 from .mainthread import run_on_main
 from .paths import LOG_FILE
 from .ui import app_menu
+from .ui import dock
 from .ui import transcript_window
 from .ui.main_window import MainWindow
 from .ui.menu_bar import MenuBarItem
@@ -96,7 +97,10 @@ class AloudDelegate(Foundation.NSObject):
         self.controller.add_observer(self)
         self.controller.start()
 
-        self.main_window.show()
+        # A menu-bar-only app that throws a window up at login is not a
+        # menu-bar-only app. With the Dock icon on, the window is the app.
+        if bool(self.config.get("interface.dock_icon", True)):
+            self.main_window.show()
         self._warn_about_permissions()
 
     def applicationShouldTerminateAfterLastWindowClosed_(self, _sender):
@@ -416,8 +420,12 @@ class AloudDelegate(Foundation.NSObject):
 def run(config: Config) -> int:
     """Start the app. Blocks until the user quits."""
     app = AppKit.NSApplication.sharedApplication()
-    # Regular, not Accessory: Dock icon, app menu, and a place in the switcher.
-    app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+    # Regular by default -- Dock icon, app menu, a place in the switcher. Set
+    # interface.dock_icon to false for the menu-bar-only shape; see ui/dock.py
+    # for what that policy actually costs.
+    app.setActivationPolicy_(
+        dock.policy_for(bool(config.get("interface.dock_icon", True)))
+    )
     delegate = AloudDelegate.alloc().initWithConfig_(config)
     app.setDelegate_(delegate)
     # Keep a strong reference; NSApplication's delegate is weak.

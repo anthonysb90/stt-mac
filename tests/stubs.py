@@ -113,12 +113,56 @@ class _FakeSound:
         return None
 
 
+class _FakeApplication:
+    """Just enough NSApplication to exercise the activation policy.
+
+    Shared, like the real one: `sharedApplication()` always hands back the same
+    object, so a test can set a policy through one call and read it through
+    another. `reset()` puts it back to Regular between tests.
+    """
+
+    #: Real values, so a mistake here would also be a mistake on a Mac.
+    REGULAR = 0
+    ACCESSORY = 1
+
+    _instance: Optional["_FakeApplication"] = None
+
+    def __init__(self) -> None:
+        self.policy = self.REGULAR
+        self.activations = 0
+
+    @classmethod
+    def sharedApplication(cls) -> "_FakeApplication":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def reset(cls) -> None:
+        cls._instance = None
+
+    def activationPolicy(self) -> int:
+        return self.policy
+
+    def setActivationPolicy_(self, policy: int) -> bool:
+        self.policy = policy
+        return True
+
+    def activateIgnoringOtherApps_(self, _flag: bool) -> None:
+        self.activations += 1
+
+
 def _make_appkit() -> types.ModuleType:
     return _module(
         "AppKit",
         NSPasteboard=_FakePasteboard,
         NSPasteboardTypeString="public.utf8-plain-text",
         NSSound=_FakeSound,
+        NSApplication=_FakeApplication,
+        NSApplicationActivationPolicyRegular=_FakeApplication.REGULAR,
+        NSApplicationActivationPolicyAccessory=_FakeApplication.ACCESSORY,
+        NSControlStateValueOn=1,
+        NSControlStateValueOff=0,
     )
 
 

@@ -53,6 +53,12 @@ DEFAULTS: Dict[str, Any] = {
             # first use and cached under ~/.cache/huggingface.
             "model": "mlx-community/parakeet-tdt-0.6b-v3",
             "language": "",
+            # Seconds of audio handed to the streaming decoder at a time when
+            # transcribing an imported file, which is what makes the words
+            # appear as it works. Smaller updates more often and loses a little
+            # accuracy at the seams. Not used for hotkey dictation, which runs
+            # in one pass.
+            "stream_chunk_seconds": 10.0,
         },
         "faster_whisper": {
             # tiny.en · base.en · small.en · medium.en · large-v3, or a
@@ -135,6 +141,13 @@ DEFAULTS: Dict[str, Any] = {
             "new line": "\n",
             "new paragraph": "\n\n",
         },
+    },
+    "interface": {
+        # False hides the Dock icon and the application menu, leaving the menu
+        # bar item as the whole interface -- the classic background-utility
+        # shape. The status menu carries Open, Settings and Quit, so nothing
+        # becomes unreachable. Changes take effect immediately.
+        "dock_icon": True,
     },
     "feedback": {
         "sounds": True,

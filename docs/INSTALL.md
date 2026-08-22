@@ -222,6 +222,22 @@ You want to see your architecture, an `ok` beside the engine marked `(active)`,
 and your microphone listed. Anything marked `--` on the active engine is a
 problem; see [Troubleshooting](#troubleshooting).
 
+**On the M1** the active engine should be `parakeet_mlx`. If it says `--` the
+line tells you which of the three requirements is missing — Apple Silicon,
+Python 3.10+, `parakeet-mlx` itself, or `ffmpeg`. Fix that one thing and re-run.
+
+One thing worth knowing about the M1: `faster-whisper` is not installed there by
+default, because Parakeet is both faster and better on that hardware. That
+leaves the automatic fallback chain thin — if Parakeet cannot load, the next
+option is whisper.cpp, which only exists if you bootstrapped with
+`--with-whisper-cpp`. If you want a local second opinion that needs no Homebrew:
+
+```sh
+./.venv/bin/python -m pip install faster-whisper
+```
+
+It works on Apple Silicon, it just will not beat Parakeet. Purely optional.
+
 ---
 
 ## Step 6 — Make a signing certificate (2 minutes, do it before building)
@@ -380,6 +396,22 @@ starts with the Mac:
 
 After that you never think about it again: hold the key in any app, speak,
 release.
+
+### Menu bar only, no Dock icon
+
+If you would rather Aloud were invisible except for the menu bar icon:
+
+**Settings (`⌘,`) → Appearance → uncheck *Show Aloud in the Dock***, or click
+the menu bar icon and untick **Show in Dock**. It applies immediately.
+
+What you are turning off is more than the Dock icon. macOS switches the app to
+its *accessory* policy, which also removes the application menu — so `⌘,` and
+`⌘Q` stop working, and Aloud no longer appears in `⌘Tab`. Everything stays
+reachable from the menu bar icon, which carries **Open Aloud**, **Settings…**
+and **Quit Aloud**. With the Dock icon off the main window also stops opening
+at launch, which is the point: it starts quietly and waits for the hotkey.
+
+To undo it, click the menu bar icon and tick **Show in Dock** again.
 
 ---
 
