@@ -52,6 +52,10 @@ app: ## Build Aloud.app into dist/
 app-standalone: ## Build a self-contained .app (experimental — see build_app.sh)
 	./scripts/build_app.sh standalone
 
+.PHONY: report
+report: ## Collect everything needed to diagnose a launch failure
+	@./scripts/report.sh 2>&1
+
 .PHONY: diagnose
 diagnose: ## Run the installed app's binary directly to see the real error
 	@echo "==> /Applications/Aloud.app/Contents/MacOS/Aloud"

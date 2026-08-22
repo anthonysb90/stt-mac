@@ -17,6 +17,8 @@ MODELS_DIR = SUPPORT_DIR / "models"
 VENDOR_DIR = SUPPORT_DIR / "vendor"
 HISTORY_FILE = SUPPORT_DIR / "history.jsonl"
 LOG_FILE = LOG_DIR / "aloud.log"
+#: Written when startup fails, because the system dialog discards the reason.
+LAUNCH_ERROR_FILE = LOG_DIR / "launch-error.txt"
 
 
 def ensure_dirs() -> None:

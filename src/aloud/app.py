@@ -16,7 +16,11 @@ about it.
 from __future__ import annotations
 
 import logging
+import platform
 import subprocess
+import sys
+import time
+from pathlib import Path
 
 import AppKit
 import Foundation
@@ -26,7 +30,7 @@ from . import APP_NAME, __version__
 from .config import Config
 from .core import DictationController, State
 from .mainthread import run_on_main
-from .paths import LOG_FILE
+from .paths import LAUNCH_ERROR_FILE, LOG_FILE, ensure_dirs
 from .ui import app_menu
 from .ui.main_window import MainWindow
 from .ui.menu_bar import MenuBarItem
@@ -209,8 +213,62 @@ class AloudDelegate(Foundation.NSObject):
         alert.runModal()
 
 
+def report_launch_failure(exc: BaseException) -> Path:
+    """Write a launch failure somewhere findable, and say so on screen.
+
+    py2app shows "Launch error — see the py2app website" and discards the
+    traceback, which is the least useful thing it could do with it. Anything
+    that escapes startup is caught here instead: written to a file, logged,
+    printed, and put in a dialog. A crash that explains itself costs one
+    round trip; one that does not costs several.
+    """
+    import traceback
+
+    ensure_dirs()
+    detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    header = (
+        f"{APP_NAME} {__version__} failed to start\n"
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"python {sys.version.split()[0]} on {platform.machine()}\n"
+        f"source {Path(__file__).resolve().parent}\n\n"
+    )
+    try:
+        LAUNCH_ERROR_FILE.write_text(header + detail, encoding="utf-8")
+    except OSError:
+        pass
+
+    log.critical("Launch failed\n%s", detail)
+    sys.stderr.write(header + detail)
+
+    try:
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_(f"{APP_NAME} could not start")
+        alert.setInformativeText_(
+            f"{type(exc).__name__}: {exc}\n\n"
+            f"The full details are in:\n{LAUNCH_ERROR_FILE}"
+        )
+        alert.addButtonWithTitle_("OK")
+        alert.addButtonWithTitle_("Show Details")
+        if alert.runModal() == AppKit.NSAlertSecondButtonReturn:
+            subprocess.run(["open", "-t", str(LAUNCH_ERROR_FILE)], check=False)
+    except Exception:
+        log.exception("Could not show the launch failure dialog")
+
+    return LAUNCH_ERROR_FILE
+
+
 def run(config: Config) -> int:
     """Start the app. Blocks until the user quits."""
+    try:
+        return _run(config)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - the whole point is to catch it
+        report_launch_failure(exc)
+        return 1
+
+
+def _run(config: Config) -> int:
     app = AppKit.NSApplication.sharedApplication()
     # Regular, not Accessory: Dock icon, app menu, and a place in the switcher.
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)

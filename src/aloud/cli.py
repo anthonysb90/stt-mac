@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import APP_NAME, __version__, engines, logging_setup
+from . import APP_NAME, __version__, build_id, engines, logging_setup
 from .config import Config
 from .paths import CONFIG_FILE, LOG_FILE, ensure_dirs
 
@@ -25,7 +25,7 @@ def _cmd_doctor(config: Config) -> int:
     configured = str(config.get("engine", engines.AUTO))
     selected = engines.select(config)
 
-    print(f"{APP_NAME} {__version__}")
+    print(f"{APP_NAME} {__version__} (build {build_id()})")
     print(f"  machine     {platform.machine()} · macOS {platform.mac_ver()[0] or 'n/a'}")
     print(f"  python      {sys.version.split()[0]}")
     print(f"  config      {CONFIG_FILE}")
@@ -133,7 +133,10 @@ def _cmd_history(limit: int) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aloud", description=f"{APP_NAME} dictation")
-    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument(
+        "--version", action="version",
+        version=f"{APP_NAME} {__version__} (build {build_id()})",
+    )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", help="launch the menu bar app (default)")
     sub.add_parser("doctor", help="report engine, device, and permission status")

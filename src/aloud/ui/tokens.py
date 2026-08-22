@@ -25,6 +25,7 @@ the real objects lazily.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from typing import Dict, Tuple
 
@@ -339,19 +340,70 @@ METRIC: Dict[str, float] = {
 _WEIGHTS = {"regular": 0.0, "medium": 0.23, "semibold": 0.3, "bold": 0.4}
 
 
-def ns_color(token: Color):
-    """Bridge a token to a dynamic NSColor that follows the system appearance."""
+#: Set once, the first time the dynamic-colour API is found not to work.
+_DYNAMIC_COLOR_UNAVAILABLE = False
+
+
+def _static_color(token: Color, dark: bool):
     import AppKit
 
-    def provider(appearance) -> "AppKit.NSColor":
+    r, g, b, a = token.rgba(dark)
+    return AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(r, g, b, a)
+
+
+def system_is_dark() -> bool:
+    """Whether the system appearance is currently dark."""
+    import AppKit
+
+    try:
+        appearance = AppKit.NSApplication.sharedApplication().effectiveAppearance()
         names = [AppKit.NSAppearanceNameDarkAqua, AppKit.NSAppearanceNameVibrantDark]
-        is_dark = appearance.bestMatchFromAppearancesWithNames_(
+        return appearance.bestMatchFromAppearancesWithNames_(
             [AppKit.NSAppearanceNameAqua] + names
         ) in names
-        r, g, b, a = token.rgba(is_dark)
-        return AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(r, g, b, a)
+    except Exception:
+        return False
 
-    return AppKit.NSColor.colorWithName_dynamicProvider_(None, provider)
+
+def ns_color(token: Color):
+    """Bridge a token to an NSColor that follows the system appearance.
+
+    ``colorWithName:dynamicProvider:`` is the right API -- it re-resolves per
+    appearance, so a colour set once stays correct when the user switches to
+    dark mode. It also hands PyObjC a Python callable to bridge into an
+    Objective-C block, which is the most fragile thing this file does.
+
+    If that ever fails, the app must still start. Falling back to a colour
+    resolved for the current appearance costs live switching (dark mode needs a
+    relaunch) and costs nothing else -- a far better trade than a window that
+    never opens.
+    """
+    global _DYNAMIC_COLOR_UNAVAILABLE
+    import AppKit
+
+    if not _DYNAMIC_COLOR_UNAVAILABLE:
+        try:
+            def provider(appearance):
+                names = [
+                    AppKit.NSAppearanceNameDarkAqua,
+                    AppKit.NSAppearanceNameVibrantDark,
+                ]
+                is_dark = appearance.bestMatchFromAppearancesWithNames_(
+                    [AppKit.NSAppearanceNameAqua] + names
+                ) in names
+                return _static_color(token, is_dark)
+
+            colour = AppKit.NSColor.colorWithName_dynamicProvider_(None, provider)
+            if colour is not None:
+                return colour
+        except Exception:
+            _DYNAMIC_COLOR_UNAVAILABLE = True
+            logging.getLogger(__name__).warning(
+                "Dynamic colours are unavailable on this system; falling back to "
+                "static ones. Appearance changes will need a relaunch."
+            )
+
+    return _static_color(token, system_is_dark())
 
 
 def ns_font(style: TextStyle):
