@@ -273,6 +273,12 @@ warm` pays it up front; the menu bar engine line says `loaded` once it's done.
 `engines.faster_whisper.model` to `tiny.en`, or switch that machine to the
 `openai` engine.
 
+**"resource_tracker: There appear to be 1 leaked semaphore objects".** Cosmetic,
+and not ours. `tqdm` — pulled in under faster-whisper — makes a multiprocessing
+lock when it is imported and never unlinks it, so Python mentions it on the way
+out. It appears at shutdown, after the work is finished, and nothing is
+actually leaked once the process is gone. Ignore it.
+
 **Nothing at all happens.** `tail -f ~/Library/Logs/Aloud/aloud.log`.
 
 ## Layout
