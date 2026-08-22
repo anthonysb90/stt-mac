@@ -251,7 +251,16 @@ footer p{margin:0 0 6px;}
   </div>
 </div>
 
-<div class="cmd" style="margin-top:28px">
+<div class="note" style="margin-top:28px; border-color:var(--accent); background:var(--accent-wash)">
+  <p><strong>In a hurry?</strong> Once the code is on this Mac (step 4), one command does everything else — picks the right Python, installs the engine and model for your architecture, builds the app, and puts it in <code>/Applications</code>. It stops at the two permissions, because nothing can grant those for you.</p>
+</div>
+<div class="cmd">
+  <div class="cmd-bar"><span class="cmd-where">Terminal — ~/Developer/aloud</span><button class="copy" type="button">Copy</button></div>
+  <pre><span class="p">$</span> ./scripts/install.sh</pre>
+</div>
+<p style="margin:-6px 0 28px; color:var(--muted); font-size:14.5px;">The steps below are the same thing, one at a time, for when you want to see what’s happening or something goes wrong.</p>
+
+<div class="cmd">
   <div class="cmd-bar"><span class="cmd-where">Terminal — not sure which Mac you’re on?</span><button class="copy" type="button">Copy</button></div>
   <pre><span class="p">$</span> uname -m</pre>
 </div>
@@ -356,7 +365,7 @@ footer p{margin:0 0 6px;}
   <div class="numeral">04</div>
   <div class="step-body">
     <div class="step-head"><h2 class="step-title">Get the code</h2></div>
-    <p class="why">Put it somewhere permanent — a development build links back to this folder, so moving it later means rebuilding.</p>
+    <p class="why">Put it somewhere permanent — the app runs against this folder, so moving or deleting it later breaks the app.</p>
     <div class="cmd">
       <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
       <pre><span class="p">$</span> mkdir -p ~/Developer &amp;&amp; cd ~/Developer
@@ -364,6 +373,23 @@ footer p{margin:0 0 6px;}
 <span class="p">$</span> cd aloud
 <span class="p">$</span> git checkout claude/whispr-dictation-app-glvd1v</pre>
     </div>
+    <div class="note warn">
+      <p><strong>If git asks you to log in, stop.</strong> On a public repo it never should. Being asked means GitHub answered “404” to an anonymous request — which it does both for a repo that doesn’t exist and for one that’s private, because it deliberately doesn’t distinguish the two. So the repo is still private, or the URL has a typo.</p>
+      <p>Fastest way past it, with no terminal login at all: <strong>download the ZIP</strong>. Nothing here needs git history.</p>
+    </div>
+    <ol class="ui">
+      <li>Open the branch in a browser you’re already signed into GitHub with: <code>github.com/anthonysb90/stt-mac/tree/claude/whispr-dictation-app-glvd1v</code></li>
+      <li>Green <strong>Code</strong> button → <strong>Download ZIP</strong>.</li>
+    </ol>
+    <div class="cmd">
+      <div class="cmd-bar"><span class="cmd-where">Terminal</span><button class="copy" type="button">Copy</button></div>
+      <pre><span class="p">$</span> mkdir -p ~/Developer
+<span class="p">$</span> cd ~/Downloads
+<span class="p">$</span> unzip stt-mac-claude-whispr-dictation-app-glvd1v.zip
+<span class="p">$</span> mv stt-mac-claude-whispr-dictation-app-glvd1v ~/Developer/aloud
+<span class="p">$</span> cd ~/Developer/aloud</pre>
+    </div>
+    <p class="why" style="margin-bottom:0">Every step from here on is identical. The only thing you give up is <code>git pull</code> for updates — download a fresh ZIP instead.</p>
   </div>
 </article>
 

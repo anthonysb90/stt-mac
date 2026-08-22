@@ -11,6 +11,24 @@ Rough time: 15 minutes on the Intel Mac, 20 on the M1 (the Parakeet model is a
 
 ---
 
+## The short version
+
+Once you have the code on the Mac (step 4 below), this does everything else —
+picks the right Python, installs the engine and model for your architecture,
+builds the app, and puts it in `/Applications`:
+
+```sh
+./scripts/install.sh
+```
+
+It stops at the two macOS permissions, because nothing can grant those for you.
+It opens the right Settings pane and tells you what to click.
+
+The rest of this page is the same thing, step by step, for when you want to see
+what is happening or something goes wrong.
+
+---
+
 ## Before you start
 
 **You need:**
@@ -118,8 +136,46 @@ cd aloud
 git checkout claude/whispr-dictation-app-glvd1v
 ```
 
-Put it somewhere permanent. The development build links back to this folder, so
-moving it later means rebuilding.
+Put it somewhere permanent. The app runs against this folder, so moving or
+deleting it later breaks the app.
+
+### If git asks you to log in
+
+On a **public** repo it never should. Being asked means GitHub answered "404"
+to an anonymous request — which happens both when a repo does not exist and
+when it is private, because GitHub deliberately does not distinguish the two.
+So: the repo is still private, or the URL has a typo.
+
+Two ways past it, neither of which needs the terminal to authenticate:
+
+**Download the ZIP instead.** Nothing here needs git history.
+
+1. Open the branch in a browser you are already signed into GitHub with:
+   `https://github.com/anthonysb90/stt-mac/tree/claude/whispr-dictation-app-glvd1v`
+2. Green **Code** button → **Download ZIP**.
+3. Then:
+
+```sh
+mkdir -p ~/Developer
+cd ~/Downloads
+unzip stt-mac-claude-whispr-dictation-app-glvd1v.zip
+mv stt-mac-claude-whispr-dictation-app-glvd1v ~/Developer/aloud
+cd ~/Developer/aloud
+```
+
+Everything from step 5 on works identically. The only thing you give up is
+`git pull` for updates — download a fresh ZIP instead.
+
+**Or make the repo genuinely public.** Repo → **Settings** → scroll to the
+bottom → **Danger Zone** → **Change repository visibility** → **Change to
+public**. It asks you to type the repository name and confirm on a second
+screen; the change only lands after that second confirmation. Then plain
+`git clone` works with no login at all.
+
+> If you ever *do* get a username/password prompt from git, note that GitHub
+> stopped accepting account passwords there in 2021. The "password" has to be a
+> personal access token. Easier: `brew install gh && gh auth login`, which
+> authenticates through the browser.
 
 ---
 

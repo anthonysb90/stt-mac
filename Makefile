@@ -9,6 +9,10 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
+.PHONY: everything
+everything: ## One command: dependencies, model, build, install
+	./scripts/install.sh
+
 .PHONY: bootstrap
 bootstrap: ## Install toolchain, dependencies, whisper.cpp, and a model
 	./scripts/bootstrap.sh
