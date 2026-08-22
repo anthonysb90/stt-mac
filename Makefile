@@ -65,14 +65,16 @@ diagnose: ## Run the installed app's binary directly to see the real error
 	@/Applications/Aloud.app/Contents/MacOS/Aloud || true
 
 .PHONY: install
-install: app ## Build and move Aloud.app into /Applications
-	@if [ -d /Applications/Aloud.app ]; then \
-		echo "==> Replacing the existing /Applications/Aloud.app"; \
-		rm -rf /Applications/Aloud.app; \
-	fi
-	cp -R dist/Aloud.app /Applications/
-	@echo "==> Installed /Applications/Aloud.app"
-	@echo "    Open it from Launchpad or Spotlight, then grant Accessibility access."
+install: ## Build Aloud.app, install it to /Applications, and verify it starts
+	./scripts/install_app.sh
+
+.PHONY: login-item
+login-item: ## Run Aloud at login straight from this folder, without a bundle
+	./scripts/login_item.sh install
+
+.PHONY: login-item-remove
+login-item-remove: ## Stop running Aloud at login
+	./scripts/login_item.sh remove
 
 .PHONY: test
 test: ## Run the unit tests

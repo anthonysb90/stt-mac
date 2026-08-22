@@ -254,6 +254,15 @@ after each rebuild.
 make install
 ```
 
+It removes any previous copy first, builds, signs, installs, and then **starts
+the bundle to prove it works** before saying it succeeded.
+
+> **Never `cp -R` a bundle into `/Applications` by hand.** If `Aloud.app` is
+> already there, `cp -R dist/Aloud.app /Applications/` copies the new one
+> *inside* the old one, leaving `/Applications/Aloud.app/Aloud.app`. Finder
+> opens the outer, stale bundle. `make install` uses `ditto`, which does not
+> have that behaviour.
+
 This builds `Aloud.app` and copies it into `/Applications`. It is a normal Mac
 app: Dock icon, application menu, a window you can close and reopen.
 
@@ -335,6 +344,28 @@ from everything your Mac has, and plays each one as you select it.
 Defaults are **Bottle** (soft rising bloop) to open and **Glass** (bright
 chime) to close. Basso, Funk and Sosumi are alert sounds — they will read as
 something going wrong.
+
+---
+
+## If the bundle will not behave
+
+There is a path with no app bundle in it at all:
+
+```sh
+make login-item
+```
+
+That installs a LaunchAgent running Aloud straight from this folder at login —
+the same command `make run` uses, minus the Terminal window. Nothing to go
+wrong at launch, because there is no bundle to go wrong.
+
+The trade is where macOS attaches permissions. With a bundle they attach to
+`Aloud.app`; here they attach to the Python binary in `.venv`, so that is what
+you add under Accessibility (press ⌘⇧G in the picker and paste the path the
+script prints). It works and it is stable, but the entry in the list will say
+"Python" — which is why the bundle is the better answer when it works.
+
+`make login-item-remove` undoes it.
 
 ---
 
