@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from aloud.core import DictationController, State
+from aloud.core import DictationController, Job, State
 from aloud.config import Config
 
 
@@ -104,7 +104,7 @@ def test_release_without_a_press_does_nothing(app):
 
 def test_transcript_is_post_processed_before_delivery(app, tmp_path):
     wav = _silent_wav(tmp_path / "job.wav")
-    app._transcribe_and_deliver(wav)
+    app._transcribe_and_deliver(Job(audio=wav))
     # Filler stripped, spoken command expanded, first letter capitalised.
     assert app.injector.delivered == ["Hello there\nfriend"]
     assert app.state is State.IDLE
@@ -121,14 +121,14 @@ def test_short_recordings_are_discarded(app, tmp_path):
 def test_empty_transcript_is_not_delivered(app, tmp_path):
     app.config.set("engines.mock.text", "")
     app.engine.options["text"] = ""
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "quiet.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "quiet.wav")))
     assert app.injector.delivered == []
 
 
 def test_dictation_is_written_to_history(app, tmp_path):
     from aloud import history
 
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     entries = history.recent(5)
     assert entries and entries[0]["text"] == "Hello there\nfriend"
 
@@ -142,7 +142,7 @@ def test_the_dictionary_corrects_before_the_text_is_delivered(app, tmp_path):
     app.dictionary.add_correction("cloud code", "Claude Code")
     app._ruleset = _rebuild(app)
 
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert app.injector.delivered == ["We shipped Claude Code today"]
 
 
@@ -154,7 +154,7 @@ def test_a_correction_that_fires_is_written_to_history(app, tmp_path):
     app.dictionary.add_correction("cloud code", "Claude Code")
     app._ruleset = _rebuild(app)
 
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     entry = history.recent(1)[0]
     assert entry["corrections"] == [
         {"entry": app.dictionary.entries[0].id, "from": "cloud code", "to": "Claude Code", "at": 5}
@@ -165,7 +165,7 @@ def test_a_correction_that_fires_is_written_to_history(app, tmp_path):
 def test_history_stays_lean_when_nothing_was_corrected(app, tmp_path):
     from aloud import history
 
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     entry = history.recent(1)[0]
     assert "corrections" not in entry and "raw" not in entry
 
@@ -176,7 +176,7 @@ def test_entries_count_their_hits(app, tmp_path):
     entry = app.dictionary.add_correction("cloud code", "Claude Code")
     app._ruleset = _rebuild(app)
 
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert app.dictionary.get(entry.id).hits == 2
 
 
@@ -203,7 +203,7 @@ def test_biasing_can_be_turned_off_without_disabling_corrections(app, tmp_path):
     app._ruleset = _rebuild(app)
 
     assert app.bias_terms() == []
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert app.injector.delivered == ["Claude Code"]
 
 
@@ -215,7 +215,7 @@ def test_disabling_the_dictionary_turns_off_both_mechanisms(app, tmp_path):
     app._ruleset = _rebuild(app)
 
     assert app.bias_terms() == []
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert app.injector.delivered == ["Cloud code"]
 
 
@@ -246,7 +246,7 @@ def test_deferring_cleanup_does_not_disable_corrections(app, tmp_path):
     app.dictionary.add_correction("cloud code", "Claude Code")
     app._ruleset = _rebuild(app)
 
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert app.injector.delivered == ["We shipped Claude Code today."]
 
 
@@ -254,7 +254,7 @@ def test_the_engine_keeps_its_own_capitalisation_when_it_owns_cleanup(app, tmp_p
     app.engine.handles_cleanup = True
     app.config.set("engines.mock.text", "iPhone settings")
     app.engine.options["text"] = "iPhone settings"
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert app.injector.delivered == ["iPhone settings"]
 
 
@@ -289,7 +289,7 @@ def test_observers_see_the_state_machine(app, tmp_path):
 def test_observers_receive_the_finished_dictation(app, tmp_path):
     watcher = Recorder()
     app.add_observer(watcher)
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert len(watcher.results) == 1
     assert watcher.results[0].text == app.injector.delivered[0]
     assert app.last is watcher.results[0]
@@ -303,7 +303,7 @@ def test_an_observer_that_raises_does_not_break_the_pipeline(app, tmp_path):
     app.add_observer(Broken())
     watcher = Recorder()
     app.add_observer(watcher)
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
     assert len(watcher.results) == 1
 
 
@@ -334,8 +334,91 @@ def test_a_dictation_reports_whether_the_dictionary_touched_it(app, tmp_path):
     app.engine.options["text"] = "open cloud code"
     app.dictionary.add_correction("cloud code", "Claude Code")
     app._ruleset = _rebuild(app)
-    app._transcribe_and_deliver(_silent_wav(tmp_path / "job.wav"))
+    app._transcribe_and_deliver(Job(audio=_silent_wav(tmp_path / "job.wav")))
 
     assert app.last.was_corrected
     assert app.last.correction_summary == "cloud code → Claude Code"
     assert app.last.raw == "open cloud code"
+
+
+# -- importing an audio file -------------------------------------------------
+
+
+def _prepared(path, converted=False, temporary=False):
+    from aloud.media import Prepared
+
+    return Prepared(path=path, temporary=temporary, converted=converted, original=path)
+
+
+def test_an_imported_file_is_never_typed_into_the_focused_app(app, tmp_path, monkeypatch):
+    """The whole reason a job carries `deliver`.
+
+    Transcribing an hour-long recording must not dump it into whatever
+    document happens to be open.
+    """
+    source = _silent_wav(tmp_path / "meeting.wav", seconds=2)
+    monkeypatch.setattr("aloud.media.prepare", lambda p: _prepared(source))
+
+    app.transcribe_file(source)
+    job = app._jobs.get()
+    assert job.deliver is False
+    assert job.source == "file"
+    assert job.label == "meeting.wav"
+
+    app._transcribe_and_deliver(job)
+    assert app.injector.delivered == []
+
+
+def test_an_imported_file_still_reaches_the_history_and_observers(app, tmp_path, monkeypatch):
+    from aloud import history
+
+    source = _silent_wav(tmp_path / "memo.wav", seconds=2)
+    monkeypatch.setattr("aloud.media.prepare", lambda p: _prepared(source))
+    watcher = Recorder()
+    app.add_observer(watcher)
+
+    app.transcribe_file(source)
+    app._transcribe_and_deliver(app._jobs.get())
+
+    assert len(watcher.results) == 1
+    assert watcher.results[0].source == "file"
+    assert watcher.results[0].label == "memo.wav"
+    assert history.recent(1)[0]["text"] == watcher.results[0].text
+
+
+def test_a_converted_file_is_cleaned_up_afterwards(app, tmp_path, monkeypatch):
+    """The temporary WAV ffmpeg wrote must not be left behind."""
+    original = tmp_path / "voice.m4a"
+    original.write_bytes(b"not really an m4a")
+    converted = _silent_wav(tmp_path / "converted.wav", seconds=2)
+    removed = []
+
+    prepared = _prepared(converted, converted=True, temporary=True)
+    monkeypatch.setattr(prepared, "cleanup", lambda: removed.append(converted))
+    monkeypatch.setattr("aloud.media.prepare", lambda p: prepared)
+
+    app.transcribe_file(original)
+    job = app._jobs.get()
+    app._drain_one_for_test(job)
+    assert removed == [converted]
+
+
+def test_a_microphone_recording_is_still_deleted_after_use(app, tmp_path):
+    wav = _silent_wav(tmp_path / "dictation.wav")
+    app._drain_one_for_test(Job(audio=wav, deliver=True, source="microphone"))
+    assert not wav.exists()
+
+
+def test_an_unreadable_file_reports_instead_of_crashing(app, tmp_path, monkeypatch):
+    from aloud.media import MediaError
+
+    def explode(_path):
+        raise MediaError("ffmpeg could not read broken.mp3: Invalid data")
+
+    monkeypatch.setattr("aloud.media.prepare", explode)
+    watcher = Recorder()
+    app.add_observer(watcher)
+
+    app.transcribe_file(tmp_path / "broken.mp3")
+    assert app._jobs.qsize() == 0
+    assert watcher.errors and "Invalid data" in watcher.errors[0][1]

@@ -304,6 +304,22 @@ def text_field(value: str, placeholder: str = "", handler: Optional[Callable] = 
     return field
 
 
+def secure_field(placeholder: str = "", handler: Optional[Callable] = None,
+                 keeper: Optional[list] = None) -> AppKit.NSSecureTextField:
+    """A masked text field, for pasting a key without it sitting on screen."""
+    field = AppKit.NSSecureTextField.alloc().init()
+    field.setPlaceholderString_(placeholder)
+    field.setFont_(T.ns_font(T.TYPE_BODY))
+    field.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    field.heightAnchor().constraintEqualToConstant_(T.METRIC["field_height"]).setActive_(True)
+    if handler is not None and keeper is not None:
+        target = action(handler)
+        keeper.append(target)
+        field.setTarget_(target)
+        field.setAction_(b"invoke:")
+    return field
+
+
 def popup(titles: Sequence[str], selected: str, handler: Callable,
           keeper: list) -> AppKit.NSPopUpButton:
     target = action(handler)
@@ -390,6 +406,30 @@ def spacer(vertical: bool = False) -> AppKit.NSView:
     return view
 
 
+def text_view(text: str, style: T.TextStyle = T.TYPE_TRANSCRIPT) -> AppKit.NSTextView:
+    """Read-only, selectable, scrollable text — a whole transcript's worth."""
+    view = AppKit.NSTextView.alloc().init()
+    view.setString_(text)
+    view.setEditable_(False)
+    view.setSelectable_(True)
+    view.setDrawsBackground_(False)
+    view.setFont_(T.ns_font(style))
+    view.setTextColor_(T.ns_color(T.TEXT_PRIMARY))
+    view.setTextContainerInset_((T.SPACE["md"], T.SPACE["md"]))
+    return view
+
+
+def text_scroller(document: AppKit.NSView) -> AppKit.NSScrollView:
+    """A scroll view for a text view, which manages its own document width."""
+    view = AppKit.NSScrollView.alloc().init()
+    view.setHasVerticalScroller_(True)
+    view.setDrawsBackground_(False)
+    view.setBorderType_(AppKit.NSNoBorder)
+    view.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    view.setDocumentView_(document)
+    return view
+
+
 def scroller(document: AppKit.NSView) -> AppKit.NSScrollView:
     view = AppKit.NSScrollView.alloc().init()
     view.setHasVerticalScroller_(True)
@@ -443,5 +483,6 @@ __all__ = [
     "Action", "TokenBox", "action", "button", "card", "checkbox", "clear",
     "empty_state", "highlighted_text", "icon_button", "label", "pad", "pill",
     "popup", "scroller", "search_field", "selectable_text", "separator",
-    "spacer", "stack", "text_field", "well",
+    "secure_field", "spacer", "stack", "text_field", "text_scroller",
+    "text_view", "well",
 ]

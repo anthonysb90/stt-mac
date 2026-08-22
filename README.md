@@ -54,8 +54,16 @@ what to do.
   because whether the microphone is live is true regardless of what you are
   looking at.
 
-**Settings** (`⌘,`) — the hotkey and the model. Everything else stays in
-`config.json`, which is the better editor for a long tail of options.
+**Transcribe a file** (`⌘O`) — point it at an mp3, m4a, wav, or the audio track
+of a screen recording. Converted to 16 kHz mono first where ffmpeg allows, so
+it takes the same path a dictation does. The result opens in its own window,
+copyable and saveable, and is deliberately *not* typed into whatever app you
+had open.
+
+**Settings** (`⌘,`) — the hotkey, the model, and API keys for the cloud
+engines. Paste a key straight in; it is stored where a Dock-launched app can
+read it, which your shell environment is not. Everything else stays in
+`config.json`, the better editor for a long tail of options.
 
 **Menu bar item** — secondary, but the one you see most, since you dictate *into*
 other apps. The glyph carries state: `◌` idle, `●` recording, `◍` transcribing.

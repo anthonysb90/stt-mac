@@ -52,6 +52,7 @@ def _multipart(fields: dict[str, str], file_field: str, path: Path) -> Tuple[byt
 class OpenAIEngine(TranscriptionEngine):
     name = "openai"
     label = "OpenAI API (cloud)"
+    needs_api_key = True
     supports_bias = True
 
     # -- contract ----------------------------------------------------------

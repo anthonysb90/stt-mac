@@ -326,10 +326,32 @@ loading. After that it stays resident.
 
 ---
 
-## Step 10 — Launch at login (optional)
+## Step 10 — Keep it running
+
+Aloud lives in the menu bar as a microphone icon. Closing the window does not
+quit it — the hotkey keeps working — so the only thing left is making sure it
+starts with the Mac:
 
 **System Settings → General → Login Items → Open at Login → +** → choose
 **Aloud**.
+
+After that you never think about it again: hold the key in any app, speak,
+release.
+
+---
+
+## Transcribing a file
+
+**File → Transcribe Audio File…** (`⌘O`). Takes mp3, m4a, wav, flac, and the
+audio track of a video. The transcript opens in its own window with Copy and
+Save buttons, and lands on the clipboard.
+
+It is not typed into the app you had open — an hour of audio has no business
+being pasted into whatever document happens to be in front of you.
+
+Files that are not already 16 kHz mono WAV are converted with ffmpeg. On Intel
+that is not installed by default; `brew install ffmpeg` if you want anything
+other than WAV.
 
 ---
 
@@ -343,21 +365,20 @@ push your Dictionary words at the model than a Whisper prompt.
 It uploads your audio, so it is never chosen automatically.
 
 1. Get a key from [deepgram.com](https://deepgram.com) (there is a free tier).
-2. Store it:
+2. Open **Aloud → Settings** (`⌘,`), set **Engine** to **Deepgram (cloud)**,
+   paste the key into **API key**, and press **Save Key**.
 
-   ```sh
-   cd ~/Developer/aloud
-   .venv/bin/python -m aloud key deepgram
-   ```
+That is the whole thing — no terminal. The field is masked, and the key is
+written to `~/Library/Application Support/Aloud/keys/deepgram.key`, readable
+only by you.
 
-   It prompts with the input hidden and writes to
-   `~/Library/Application Support/Aloud/keys/deepgram.key`, readable only by you.
+> **Why not just export it in `.zshrc`?** An app launched from the Dock does not
+> inherit your shell environment, so a key set that way works in Terminal and
+> silently fails in the app. Settings writes it somewhere the app can actually
+> read.
 
-   > **Do not just export it in `.zshrc`.** An app launched from the Dock does
-   > not inherit your shell environment, so the key would work in Terminal and
-   > silently fail in the app. That is what `aloud key` exists to avoid.
-
-3. In **Aloud → Settings** (⌘,), set **Engine** to **Deepgram (cloud)**.
+There is a command-line equivalent if you prefer it —
+`.venv/bin/python -m aloud key deepgram` — but nothing needs it.
 
 Aloud turns off its own filler-stripping and punctuation when Deepgram is
 active, so the two never fight over the same text. Your Dictionary corrections

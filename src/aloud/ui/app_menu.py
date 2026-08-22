@@ -72,6 +72,12 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
     app_menu.addItem_(AppKit.NSMenuItem.separatorItem())
     app_menu.addItem_(_item(f"Quit {APP_NAME}", b"terminate:", "q"))
 
+    # --- File --------------------------------------------------------------
+    file_menu = _submenu(main, "File")
+    file_menu.addItem_(_item("Transcribe Audio File…", b"transcribeFile:", "o", target=target))
+    file_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+    file_menu.addItem_(_item("Close", b"performClose:", "w"))
+
     # --- Dictation ---------------------------------------------------------
     dictation = _submenu(main, "Dictation")
     dictation.addItem_(_item("Start Dictation", b"startDictation:", "d", target=target))
@@ -110,8 +116,6 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
     window = _submenu(main, "Window")
     window.addItem_(_item("Minimize", b"performMiniaturize:", "m"))
     window.addItem_(_item("Zoom", b"performZoom:"))
-    window.addItem_(AppKit.NSMenuItem.separatorItem())
-    window.addItem_(_item("Close", b"performClose:", "w"))
     window.addItem_(AppKit.NSMenuItem.separatorItem())
     window.addItem_(_item(f"{APP_NAME} Window", b"showMainWindow:", "0", target=target))
     AppKit.NSApplication.sharedApplication().setWindowsMenu_(window)

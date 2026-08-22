@@ -28,6 +28,7 @@ from .core import DictationController, State
 from .mainthread import run_on_main
 from .paths import LOG_FILE
 from .ui import app_menu
+from .ui import transcript_window
 from .ui.main_window import MainWindow
 from .ui.menu_bar import MenuBarItem
 from .ui.settings_window import SettingsWindow
@@ -47,6 +48,7 @@ class AloudDelegate(Foundation.NSObject):
         self.main_window = None
         self.settings = None
         self.menu_bar = None
+        self._transcript_windows = []
         return self
 
     # -- lifecycle ---------------------------------------------------------
@@ -125,8 +127,30 @@ class AloudDelegate(Foundation.NSObject):
         run_on_main(lambda: self._apply_state(state))
 
     @objc.python_method
-    def on_result(self, _dictation) -> None:
-        run_on_main(lambda: self.main_window.on_result())
+    def on_result(self, dictation) -> None:
+        run_on_main(lambda: self._deliver_result(dictation))
+
+    @objc.python_method
+    def _deliver_result(self, dictation) -> None:
+        self.main_window.on_result()
+        if dictation.source != "file":
+            return
+        # An imported transcript was not typed anywhere, so it needs somewhere
+        # to be. Held in a list because AppKit keeps only a weak reference and
+        # a collected window closes itself.
+        window = transcript_window.TranscriptWindow(dictation)
+        window.copy()
+        self._transcript_windows.append(window)
+        window.show()
+
+    @objc.python_method
+    def on_empty(self, job) -> None:
+        if job.source != "file":
+            return
+        run_on_main(lambda: self._alert(
+            "Nothing to transcribe",
+            f"No speech was recognised in {job.label}.",
+        ))
 
     @objc.python_method
     def on_error(self, title: str, message: str) -> None:
@@ -167,6 +191,11 @@ class AloudDelegate(Foundation.NSObject):
     def showDictionary_(self, _sender):
         self.main_window.show()
         self.main_window.show_pane(1)
+
+    def transcribeFile_(self, _sender):
+        path = transcript_window.open_panel()
+        if path is not None:
+            self.controller.transcribe_file(path)
 
     def startDictation_(self, _sender):
         self.controller.begin_recording()
@@ -215,6 +244,8 @@ class AloudDelegate(Foundation.NSObject):
             return state is State.RECORDING
         if selector == b"copyLast:":
             return self.controller.last is not None
+        if selector == b"transcribeFile:":
+            return self.controller.state is not State.TRANSCRIBING
         return True
 
     # -- helpers -----------------------------------------------------------

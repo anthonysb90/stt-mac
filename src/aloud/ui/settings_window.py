@@ -15,7 +15,7 @@ from typing import Optional
 
 import AppKit
 
-from .. import APP_NAME, engines
+from .. import APP_NAME, engines, secrets
 from ..hotkey import available_keys, describe
 from . import components as C
 from . import tokens as T
@@ -46,6 +46,10 @@ class SettingsWindow:
         self._model_field = None
         self._model_hint = None
         self._engine_detail = None
+        self._key_field = None
+        self._key_status = None
+        self._key_buttons = None
+        self._key_rows = None
 
     # -- presentation ------------------------------------------------------
 
@@ -58,7 +62,13 @@ class SettingsWindow:
 
     def _build(self) -> None:
         content = C.stack(
-            [self._hotkey_section(), C.separator(), self._model_section()],
+            [
+                self._hotkey_section(),
+                C.separator(),
+                self._model_section(),
+                C.separator(),
+                self._credentials_section(),
+            ],
             spacing=T.INSET["section"],
         )
         content.setAlignment_(AppKit.NSLayoutAttributeLeading)
@@ -166,6 +176,7 @@ class SettingsWindow:
     def _set_engine(self, name: str) -> None:
         self.controller.use_engine(name)
         self._refresh_model_section()
+        self._refresh_credentials()
 
     def _set_model(self, value: str) -> None:
         self.config.set(f"engines.{self._active_engine_name()}.model", value.strip())
@@ -187,6 +198,81 @@ class SettingsWindow:
         self._model_field.setStringValue_(self._current_model())
         self._model_field.setEnabled_(name != "mock")
         self._model_hint.setStringValue_(MODEL_HINTS.get(name, ""))
+
+    # -- credentials -------------------------------------------------------
+
+    def _credentials_section(self) -> AppKit.NSView:
+        """Where a cloud engine's API key gets pasted.
+
+        Storing it here rather than in the environment is not a convenience: a
+        GUI app launched from the Dock does not inherit your shell, so an
+        exported variable works in a terminal and silently fails in the app.
+        """
+        self._key_field = C.secure_field(
+            "Paste your API key", lambda _s: self._save_key(), self._keeper
+        )
+        self._key_status = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True)
+
+        save = C.button("Save Key", lambda _s: self._save_key(), self._keeper)
+        clear = C.button("Remove", lambda _s: self._clear_key(), self._keeper)
+        self._key_buttons = C.stack(
+            [C.spacer(), clear, save], vertical=False, spacing=T.SPACE["md"]
+        )
+
+        self._key_rows = C.stack(
+            [self._field_row("API key", self._key_field), self._key_buttons, self._key_status],
+            spacing=T.SPACE["lg"],
+        )
+        self._key_rows.setAlignment_(AppKit.NSLayoutAttributeLeading)
+
+        section = self._section("Credentials", [self._key_rows])
+        self._refresh_credentials()
+        return section
+
+    def _refresh_credentials(self) -> None:
+        engine = self.controller.engine
+        needed = bool(getattr(engine, "needs_api_key", False))
+        for view in (self._key_field, self._key_buttons):
+            view.setHidden_(not needed)
+
+        if not needed:
+            self._key_status.setStringValue_(
+                f"{engine.label} runs on this Mac and needs no key."
+            )
+            self._key_status.setTextColor_(T.ns_color(T.TEXT_TERTIARY))
+            return
+
+        source = secrets.describe_source(engine.api_key_env, engine.name)
+        self._key_field.setStringValue_("")
+        if source == "not set":
+            self._key_status.setStringValue_(
+                f"No key stored for {engine.label}. Paste one above and press Save."
+            )
+            self._key_status.setTextColor_(T.ns_color(T.STATUS_WARNING))
+        else:
+            self._key_status.setStringValue_(f"A key is stored — read from {source}.")
+            self._key_status.setTextColor_(T.ns_color(T.STATUS_SUCCESS))
+
+    def _save_key(self) -> None:
+        engine = self.controller.engine
+        value = self._key_field.stringValue().strip()
+        if not value:
+            self._key_status.setStringValue_("Nothing to save — the field is empty.")
+            self._key_status.setTextColor_(T.ns_color(T.STATUS_WARNING))
+            return
+        secrets.store_key(engine.name, value)
+        self._key_field.setStringValue_("")
+        # Rebuild so the engine picks the key up without a restart.
+        self.controller.use_engine(str(self.config.get("engine", engines.AUTO)))
+        self._refresh_model_section()
+        self._refresh_credentials()
+
+    def _clear_key(self) -> None:
+        engine = self.controller.engine
+        secrets.forget_key(engine.name)
+        self.controller.use_engine(str(self.config.get("engine", engines.AUTO)))
+        self._refresh_model_section()
+        self._refresh_credentials()
 
     # -- layout helpers ----------------------------------------------------
 

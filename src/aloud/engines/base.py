@@ -34,6 +34,9 @@ class TranscriptionEngine(abc.ABC):
     name: str = "base"
     #: Shown in the UI.
     label: str = "Base"
+    #: Whether this backend needs an API key. Drives the credentials field in
+    #: Settings, so a key can be pasted in rather than stored from a terminal.
+    needs_api_key: bool = False
     #: Whether the backend already punctuates, capitalises, strips fillers and
     #: honours spoken punctuation. When true the local post-processing steps
     #: that would duplicate that work are skipped.
@@ -65,3 +68,8 @@ class TranscriptionEngine(abc.ABC):
 
     def warm_up(self) -> None:
         """Optional hook to pay one-off setup costs before the first use."""
+
+    @property
+    def api_key_env(self) -> str:
+        """The environment variable this backend reads, if any."""
+        return str(self.options.get("api_key_env", ""))

@@ -59,6 +59,7 @@ class MainWindow:
         self._on_settings = on_settings
         self._keeper: list = []
         self._pane = HISTORY
+        self._has_been_placed = False
 
         self.history = HistoryView()
         self.dictionary = DictionaryView(
@@ -145,6 +146,10 @@ class MainWindow:
         window.setTitle_(APP_NAME)
         window.setMinSize_((T.METRIC["window_width_min"], T.METRIC["window_height_min"]))
         window.setReleasedWhenClosed_(False)
+        # Remember where the user put it. Without this the window opens at the
+        # content rect's origin — (0, 0), which in Cocoa is the *bottom* left
+        # corner of the screen, so it appears tucked into the corner.
+        window.setFrameAutosaveName_("AloudMainWindow")
         window.setBackgroundColor_(T.ns_color(T.BG_WINDOW))
         window.setTitlebarAppearsTransparent_(False)
 
@@ -233,6 +238,12 @@ class MainWindow:
     # -- window ------------------------------------------------------------
 
     def show(self) -> None:
+        if not self._has_been_placed:
+            # setFrameUsingName returns False when there is no saved frame,
+            # which is the first launch — centre it then, and only then.
+            if not self.window.setFrameUsingName_("AloudMainWindow"):
+                self.window.center()
+            self._has_been_placed = True
         self.window.makeKeyAndOrderFront_(None)
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         if self._pane == HISTORY:

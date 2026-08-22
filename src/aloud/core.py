@@ -34,7 +34,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import corrections, engines, history, hotkey as hotkey_mod
+from . import corrections, engines, history, hotkey as hotkey_mod, media
 from .audio import AudioError, Recorder, wav_duration
 from .config import Config
 from .corrections import CorrectionResult
@@ -54,6 +54,23 @@ class State(Enum):
 
 
 @dataclass
+class Job:
+    """One unit of work for the transcription thread.
+
+    ``deliver`` is the whole reason this is a class rather than a path. A
+    dictation is typed into whatever app you are looking at; a file you
+    imported must not be, or transcribing an hour-long recording would dump
+    it into the document you happen to have open.
+    """
+
+    audio: Path
+    deliver: bool = True
+    source: str = "microphone"
+    label: str = ""
+    cleanup: Optional[Any] = None
+
+
+@dataclass
 class Dictation:
     """One completed dictation, as the UI and the history file see it."""
 
@@ -63,6 +80,10 @@ class Dictation:
     seconds: float
     at: float = field(default_factory=time.time)
     corrections: List[Dict[str, Any]] = field(default_factory=list)
+    #: "microphone" for a dictation, "file" for something you imported.
+    source: str = "microphone"
+    #: The file's name, when this came from one.
+    label: str = ""
 
     @property
     def was_corrected(self) -> bool:
@@ -228,7 +249,7 @@ class DictationController:
             return
 
         self._set_state(State.TRANSCRIBING)
-        self._jobs.put(wav_path)
+        self._jobs.put(Job(audio=wav_path, deliver=True, source="microphone"))
 
     def cancel_recording(self) -> None:
         """Abandon the current recording without transcribing it."""
@@ -265,18 +286,32 @@ class DictationController:
             job = self._jobs.get()
             if job is _STOP:
                 return
-            wav_path = job
-            assert isinstance(wav_path, Path)
-            try:
-                self._transcribe_and_deliver(wav_path)
-            except Exception as exc:
-                log.exception("Transcription pipeline failed")
-                self._fail("Transcription failed", str(exc))
-            finally:
-                wav_path.unlink(missing_ok=True)
-                self._jobs.task_done()
+            assert isinstance(job, Job)
+            self._run_job(job)
+            self._jobs.task_done()
 
-    def _transcribe_and_deliver(self, wav_path: Path) -> None:
+    def _run_job(self, job: "Job") -> None:
+        """One job, start to finish, including tidying up after it."""
+        try:
+            self._transcribe_and_deliver(job)
+        except Exception as exc:
+            log.exception("Transcription pipeline failed")
+            self._fail("Transcription failed", str(exc))
+        finally:
+            if job.cleanup is not None:
+                try:
+                    job.cleanup()
+                except Exception:
+                    log.exception("Could not clean up after %s", job.audio)
+            elif job.source == "microphone":
+                # An imported file belongs to the user; a recording is ours.
+                job.audio.unlink(missing_ok=True)
+
+    #: Tests drive one job at a time rather than starting the worker thread.
+    _drain_one_for_test = _run_job
+
+    def _transcribe_and_deliver(self, job: Job) -> None:
+        wav_path = job.audio
         started = time.monotonic()
         transcript = self.engine.transcribe(wav_path, bias_terms=self.bias_terms())
 
@@ -287,15 +322,17 @@ class DictationController:
         elapsed = time.monotonic() - started
 
         if not text:
-            log.info("Nothing recognised in %.2fs of audio", wav_duration(wav_path))
+            log.info("Nothing recognised in %s", job.label or "the recording")
             self._set_state(State.IDLE)
+            self._emit("on_empty", job)
             return
 
         log.info(
-            "Transcribed %d chars in %.2fs via %s (%d corrections)",
-            len(text), elapsed, transcript.engine, len(result.applied),
+            "Transcribed %d chars in %.2fs via %s (%d corrections) from %s",
+            len(text), elapsed, transcript.engine, len(result.applied), job.source,
         )
-        self.injector.deliver(text)
+        if job.deliver:
+            self.injector.deliver(text)
 
         for applied in result.applied:
             self.dictionary.record_hit(applied.entry_id)
@@ -306,6 +343,8 @@ class DictationController:
             engine=transcript.engine,
             seconds=elapsed,
             corrections=[applied.to_dict() for applied in result.applied],
+            source=job.source,
+            label=job.label,
         )
         self._last = dictation
 
@@ -321,6 +360,36 @@ class DictationController:
 
         self._set_state(State.IDLE)
         self._emit("on_result", dictation)
+
+    # -- importing a file --------------------------------------------------
+
+    def transcribe_file(self, path: Path) -> None:
+        """Queue an audio or video file for transcription.
+
+        Converted to 16 kHz mono WAV first where ffmpeg allows, so the rest of
+        the pipeline is identical to a dictation. The result is *not* typed
+        anywhere — it goes to the history and to whoever is listening.
+        """
+        path = Path(path).expanduser()
+        try:
+            prepared = media.prepare(path)
+        except media.MediaError as exc:
+            log.error("%s", exc)
+            self._fail("Could not read that file", str(exc))
+            return
+
+        log.info(
+            "Importing %s (%s)", path.name,
+            "converted to 16 kHz mono" if prepared.converted else "used as-is",
+        )
+        self._set_state(State.TRANSCRIBING)
+        self._jobs.put(Job(
+            audio=prepared.path,
+            deliver=False,
+            source="file",
+            label=path.name,
+            cleanup=prepared.cleanup,
+        ))
 
     # -- cleanup and the dictionary ---------------------------------------
 

@@ -51,6 +51,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
+from ..media import mime_type
 from ..secrets import describe_source, read_key
 from .base import EngineError, Transcript, TranscriptionEngine
 
@@ -81,6 +82,7 @@ KEYTERM_INCOMPATIBLE_LANGUAGES = ("multi",)
 class DeepgramEngine(TranscriptionEngine):
     name = "deepgram"
     label = "Deepgram (cloud)"
+    needs_api_key = True
     supports_bias = True
     #: Deepgram punctuates, capitalises and strips fillers server-side, so the
     #: local post-processing stage stands down for those steps.
@@ -111,7 +113,9 @@ class DeepgramEngine(TranscriptionEngine):
             method="POST",
             headers={
                 "Authorization": f"Token {self._api_key()}",
-                "Content-Type": "audio/wav",
+                # Dictations are always WAV, but an imported file can be
+                # anything ffmpeg declined to convert.
+                "Content-Type": mime_type(wav_path),
             },
         )
 

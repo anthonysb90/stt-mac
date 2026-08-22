@@ -22,7 +22,23 @@ from ..hotkey import describe
 from . import components as C
 from . import tokens as T
 
-#: A shape per state. Filled means live.
+#: SF Symbols, drawn as *template* images so macOS tints them itself — black on
+#: a light menu bar, white on a dark one, dimmed when the bar is inactive.
+#:
+#: The first version of this drew a coloured text glyph instead, which was a
+#: mistake: a custom grey on a bar the system also draws in grey is very close
+#: to invisible, and the colour could not follow the bar's own appearance.
+#: Recording is the one state that overrides the tint, because "the microphone
+#: is live" has to be visible in peripheral vision.
+SYMBOLS = {
+    State.IDLE: "mic",
+    State.RECORDING: "mic.fill",
+    State.TRANSCRIBING: "waveform",
+    State.ERROR: "exclamationmark.triangle",
+}
+
+#: Used only where SF Symbols are unavailable (before Big Sur). Set as a plain
+#: title so the system picks the colour.
 GLYPHS = {
     State.IDLE: "◌",
     State.RECORDING: "●",
@@ -30,10 +46,9 @@ GLYPHS = {
     State.ERROR: "⊘",
 }
 
-GLYPH_COLOURS = {
-    State.IDLE: T.TEXT_SECONDARY,
+#: Only states that must override the system tint appear here.
+GLYPH_TINTS = {
     State.RECORDING: T.STATUS_RECORDING_FILL,
-    State.TRANSCRIBING: T.STATUS_TRANSCRIBING,
     State.ERROR: T.STATUS_ERROR,
 }
 
@@ -85,9 +100,7 @@ class MenuBarItem:
 
     def set_state(self, state: State) -> None:
         button = self.item.button()
-        button.setAttributedTitle_(
-            _styled(GLYPHS[state], GLYPH_COLOURS[state], T.TYPE_TITLE_3)
-        )
+        self._draw_glyph(button, state)
         button.setToolTip_(f"{APP_NAME} — {state.value}")
         self._set_title(self.status_item, state.value, T.TEXT_SECONDARY)
         self._set_title(
@@ -96,6 +109,32 @@ class MenuBarItem:
             T.TEXT_PRIMARY,
         )
         self.toggle_item.setEnabled_(state is not State.TRANSCRIBING)
+
+    @staticmethod
+    def _draw_glyph(button, state: State) -> None:
+        """Prefer a template symbol; fall back to a system-coloured glyph."""
+        image = None
+        if hasattr(AppKit.NSImage, "imageWithSystemSymbolName_accessibilityDescription_"):
+            image = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                SYMBOLS[state], f"{APP_NAME} {state.value}"
+            )
+
+        tint = GLYPH_TINTS.get(state)
+        if image is not None:
+            image.setTemplate_(True)
+            button.setImage_(image)
+            button.setTitle_("")
+            # A template image is tinted by the system unless we say otherwise.
+            button.setContentTintColor_(T.ns_color(tint) if tint else None)
+            return
+
+        button.setImage_(None)
+        if tint is None:
+            # No attributed string: the system knows what colour its own menu
+            # bar text should be, and it changes with the wallpaper.
+            button.setTitle_(GLYPHS[state])
+        else:
+            button.setAttributedTitle_(_styled(GLYPHS[state], tint, T.TYPE_TITLE_3))
 
     def set_hotkey(self, key: str, mode: str) -> None:
         verb = "Hold" if mode == "hold" else "Tap"
