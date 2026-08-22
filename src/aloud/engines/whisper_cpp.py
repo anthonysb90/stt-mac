@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from ..corrections import bias_prompt
 from ..paths import MODELS_DIR, VENDOR_DIR
@@ -117,7 +117,13 @@ class WhisperCppEngine(TranscriptionEngine):
             return False, f"No ggml-*.bin model in {MODELS_DIR}. Run scripts/fetch_model.sh base.en."
         return True, f"{self.binary.name} + {self.model.name}"
 
-    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+    def transcribe(
+        self,
+        wav_path: Path,
+        *,
+        bias_terms: Sequence[str] = (),
+        on_progress: Optional[Callable[[str, float, float], bool]] = None,
+    ) -> Transcript:
         ok, detail = self.check()
         if not ok:
             raise EngineError(detail)

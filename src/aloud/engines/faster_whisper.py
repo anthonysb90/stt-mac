@@ -17,7 +17,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 from ..corrections import bias_prompt
 from .base import EngineError, Transcript, TranscriptionEngine
@@ -31,6 +31,9 @@ class FasterWhisperEngine(TranscriptionEngine):
     name = "faster_whisper"
     label = "faster-whisper (local, CPU)"
     supports_bias = True
+    #: `segments` is a generator — iterating it *is* the decoding, so the
+    #: partial transcript and the position in the audio are free.
+    supports_progress = True
 
     def __init__(self, options=None) -> None:
         super().__init__(options)
@@ -54,7 +57,13 @@ class FasterWhisperEngine(TranscriptionEngine):
         except EngineError as exc:
             log.warning("faster-whisper warm-up failed: %s", exc)
 
-    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+    def transcribe(
+        self,
+        wav_path: Path,
+        *,
+        bias_terms: Sequence[str] = (),
+        on_progress: Optional[Callable[[str, float, float], bool]] = None,
+    ) -> Transcript:
         model = self._load()
         started = time.monotonic()
         language = str(self.options.get("language", "") or "") or None
@@ -69,7 +78,21 @@ class FasterWhisperEngine(TranscriptionEngine):
                 condition_on_previous_text=False,  # avoids run-on hallucinations
                 initial_prompt=prompt,
             )
-            text = " ".join(segment.text.strip() for segment in segments).strip()
+            total = float(getattr(info, "duration", 0.0) or 0.0)
+            pieces = []
+            for segment in segments:
+                piece = segment.text.strip()
+                if piece:
+                    pieces.append(piece)
+                if on_progress is not None:
+                    keep_going = on_progress(
+                        " ".join(pieces), float(getattr(segment, "end", 0.0) or 0.0), total
+                    )
+                    if not keep_going:
+                        log.info("Transcription cancelled after %.1fs of audio",
+                                 getattr(segment, "end", 0.0))
+                        break
+            text = " ".join(pieces).strip()
         except Exception as exc:
             raise EngineError(f"faster-whisper transcription failed: {exc}") from exc
 

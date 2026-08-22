@@ -17,6 +17,7 @@ Two AppKit details worth knowing before reading further:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 import AppKit
@@ -46,6 +47,53 @@ class Action(Foundation.NSObject):
 
 def action(handler: Callable) -> Action:
     return Action.alloc().initWithHandler_(handler)
+
+
+class MenuRefresher(Foundation.NSObject):
+    """Rebuilds a menu the moment before it is shown.
+
+    Device lists are the reason: plugging in a headset is exactly when someone
+    reaches for the microphone menu, and a list built at launch would not have
+    it.
+    """
+
+    def initWithHandler_(self, handler):
+        self = objc.super(MenuRefresher, self).init()
+        if self is None:
+            return None
+        self._handler = handler
+        return self
+
+    def menuWillOpen_(self, menu):
+        try:
+            self._handler(menu)
+        except Exception:
+            pass
+
+
+def refreshing_menu(builder: Callable, keeper: list) -> AppKit.NSMenu:
+    """An NSMenu whose contents are rebuilt by ``builder(menu)`` on each open."""
+    menu = AppKit.NSMenu.alloc().init()
+    refresher = MenuRefresher.alloc().initWithHandler_(builder)
+    keeper.append(refresher)
+    menu.setDelegate_(refresher)
+    builder(menu)
+    return menu
+
+
+def menu_item(title: str, handler: Optional[Callable], keeper: list,
+              checked: bool = False, enabled: bool = True) -> AppKit.NSMenuItem:
+    item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
+    if handler is not None:
+        target = action(lambda _sender, fn=handler: fn())
+        keeper.append(target)
+        item.setTarget_(target)
+        item.setAction_(b"invoke:")
+    item.setState_(
+        AppKit.NSControlStateValueOn if checked else AppKit.NSControlStateValueOff
+    )
+    item.setEnabled_(enabled)
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +248,126 @@ class TokenBox(AppKit.NSView):
         self.setNeedsDisplay_(True)
 
 
+class DropZone(TokenBox):
+    """A panel you can drag a file onto.
+
+    Subclasses TokenBox rather than NSView so it draws from the same tokens as
+    every other surface; all it adds is the drag protocol and a highlight while
+    something acceptable is hovering over it.
+    """
+
+    def initWithHandler_accepts_fill_border_radius_(
+        self, handler, accepts, fill, border, radius
+    ):
+        self = TokenBox.initWithFill_border_radius_(self, fill, border, radius)
+        if self is None:
+            return None
+        self._handler = handler
+        self._accepts = accepts
+        self._resting_fill = fill
+        self._resting_border = border
+        self._hovering = False
+        self.registerForDraggedTypes_([AppKit.NSPasteboardTypeFileURL])
+        return self
+
+    # -- drag protocol -----------------------------------------------------
+
+    @objc.python_method
+    def _dragged_path(self, sender):
+        pasteboard = sender.draggingPasteboard()
+        urls = pasteboard.readObjectsForClasses_options_(
+            [Foundation.NSURL], {AppKit.NSPasteboardURLReadingFileURLsOnlyKey: True}
+        )
+        if not urls or len(urls) == 0:
+            return None
+        return Path(urls[0].path())
+
+    def draggingEntered_(self, sender):
+        path = self._dragged_path(sender)
+        if path is None or not self._accepts(path):
+            return AppKit.NSDragOperationNone
+        self._set_hovering(True)
+        return AppKit.NSDragOperationCopy
+
+    def draggingExited_(self, _sender):
+        self._set_hovering(False)
+
+    def draggingEnded_(self, _sender):
+        self._set_hovering(False)
+
+    def prepareForDragOperation_(self, sender):
+        path = self._dragged_path(sender)
+        return path is not None and self._accepts(path)
+
+    def performDragOperation_(self, sender):
+        self._set_hovering(False)
+        path = self._dragged_path(sender)
+        if path is None:
+            return False
+        try:
+            self._handler(path)
+        except Exception:
+            return False
+        return True
+
+    @objc.python_method
+    def _set_hovering(self, hovering: bool) -> None:
+        if hovering == self._hovering:
+            return
+        self._hovering = hovering
+        self.set_fill(T.BG_SELECTION if hovering else self._resting_fill)
+        self.set_border(
+            T.BORDER_FOCUS if hovering else self._resting_border,
+            T.BORDER["focus"] if hovering else T.BORDER["default"],
+        )
+
+
+def drop_zone(
+    handler: Callable,
+    accepts: Callable,
+    content: AppKit.NSView,
+    fill: Optional[T.Color] = T.BG_INSET,
+    border: Optional[T.Color] = T.BORDER_DEFAULT,
+    radius: float = T.RADIUS["lg"],
+) -> DropZone:
+    """A drop target wrapping ``content``, which is centred inside it."""
+    zone = DropZone.alloc().initWithHandler_accepts_fill_border_radius_(
+        handler, accepts, fill, border, radius
+    )
+    zone.addSubview_(content)
+    AppKit.NSLayoutConstraint.activateConstraints_([
+        content.centerXAnchor().constraintEqualToAnchor_(zone.centerXAnchor()),
+        content.centerYAnchor().constraintEqualToAnchor_(zone.centerYAnchor()),
+        content.leadingAnchor().constraintGreaterThanOrEqualToAnchor_constant_(
+            zone.leadingAnchor(), T.INSET["card"]
+        ),
+        content.trailingAnchor().constraintLessThanOrEqualToAnchor_constant_(
+            zone.trailingAnchor(), -T.INSET["card"]
+        ),
+    ])
+    return zone
+
+
+def drop_surface(handler: Callable, accepts: Callable, content: AppKit.NSView) -> DropZone:
+    """A drop target that ``content`` fills completely.
+
+    Used for the window itself, so a file can be dropped anywhere rather than
+    only onto the Transcribe pane — having to find the right tab before you can
+    drop something is exactly the friction drag-and-drop exists to remove.
+    """
+    zone = DropZone.alloc().initWithHandler_accepts_fill_border_radius_(
+        handler, accepts, T.BG_WINDOW, None, 0
+    )
+    zone.addSubview_(content)
+    AppKit.NSLayoutConstraint.activateConstraints_([
+        content.leadingAnchor().constraintEqualToAnchor_(zone.leadingAnchor()),
+        content.trailingAnchor().constraintEqualToAnchor_(zone.trailingAnchor()),
+        content.topAnchor().constraintEqualToAnchor_(zone.topAnchor()),
+        content.bottomAnchor().constraintEqualToAnchor_(zone.bottomAnchor()),
+    ])
+    return zone
+
+
 def card(
     fill: T.Color = T.BG_SURFACE,
     border: Optional[T.Color] = T.BORDER_SUBTLE,
@@ -337,6 +505,20 @@ def popup(titles: Sequence[str], selected: str, handler: Callable,
     return control
 
 
+def menu_popup(builder: Callable, keeper: list, width: float,
+               tooltip: str = "") -> AppKit.NSPopUpButton:
+    """A popup whose menu is rebuilt by ``builder(menu)`` each time it opens."""
+    control = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+        ((0, 0), (width, T.METRIC["control_height"])), False
+    )
+    control.setFont_(T.ns_font(T.TYPE_CALLOUT))
+    control.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    if tooltip:
+        control.setToolTip_(tooltip)
+    control.setMenu_(refreshing_menu(builder, keeper))
+    return control
+
+
 def checkbox(title: str, checked: bool, handler: Callable, keeper: list) -> AppKit.NSButton:
     target = action(handler)
     keeper.append(target)
@@ -404,6 +586,19 @@ def spacer(vertical: bool = False) -> AppKit.NSView:
             else AppKit.NSLayoutConstraintOrientationHorizontal)
     view.setContentHuggingPriority_forOrientation_(1, axis)
     return view
+
+
+def progress_bar(indeterminate: bool = True) -> AppKit.NSProgressIndicator:
+    """A horizontal bar. Indeterminate until we know how long the audio is."""
+    bar = AppKit.NSProgressIndicator.alloc().init()
+    bar.setStyle_(AppKit.NSProgressIndicatorStyleBar)
+    bar.setIndeterminate_(indeterminate)
+    bar.setMinValue_(0.0)
+    bar.setMaxValue_(1.0)
+    bar.setUsesThreadedAnimation_(True)
+    bar.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    bar.heightAnchor().constraintEqualToConstant_(T.METRIC["meter_height_large"]).setActive_(True)
+    return bar
 
 
 def text_view(text: str, style: T.TextStyle = T.TYPE_TRANSCRIPT) -> AppKit.NSTextView:
@@ -480,9 +675,12 @@ def empty_state(headline: str, detail: str) -> AppKit.NSView:
 
 
 __all__ = [
-    "Action", "TokenBox", "action", "button", "card", "checkbox", "clear",
+    "Action", "DropZone", "TokenBox", "action", "button", "card", "checkbox",
+    "MenuRefresher", "clear", "drop_surface", "drop_zone", "menu_item",
+    "refreshing_menu",
     "empty_state", "highlighted_text", "icon_button", "label", "pad", "pill",
-    "popup", "scroller", "search_field", "selectable_text", "separator",
+    "menu_popup", "popup", "progress_bar", "scroller", "search_field", "selectable_text",
+    "separator",
     "secure_field", "spacer", "stack", "text_field", "text_scroller",
     "text_view", "well",
 ]

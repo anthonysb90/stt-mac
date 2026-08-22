@@ -78,6 +78,22 @@ def meter_colour(level: float) -> T.Color:
     return chosen
 
 
+def clock(seconds: float) -> str:
+    """Seconds as m:ss, or h:mm:ss past an hour — how long audio is talked about."""
+    seconds = max(int(seconds), 0)
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def shorten(text: str, limit: int = 34) -> str:
+    """Trim a label to fit a narrow control without hiding which one it is."""
+    text = text.strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
 def preview(text: str, limit: int = 48) -> str:
     """Shorten a transcript for a one-line summary."""
     collapsed = " ".join(text.split())

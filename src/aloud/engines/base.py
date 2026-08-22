@@ -5,7 +5,7 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Sequence, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 
 @dataclass
@@ -34,6 +34,10 @@ class TranscriptionEngine(abc.ABC):
     name: str = "base"
     #: Shown in the UI.
     label: str = "Base"
+    #: Whether transcribe() can report partial results while it works. Long
+    #: files are unbearable without it -- a progress bar you cannot see moving
+    #: is indistinguishable from a hang.
+    supports_progress: bool = False
     #: Whether this backend needs an API key. Drives the credentials field in
     #: Settings, so a key can be pasted in rather than stored from a terminal.
     needs_api_key: bool = False
@@ -51,11 +55,23 @@ class TranscriptionEngine(abc.ABC):
         self.options = options or {}
 
     @abc.abstractmethod
-    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+    def transcribe(
+        self,
+        wav_path: Path,
+        *,
+        bias_terms: Sequence[str] = (),
+        on_progress: Optional[Callable[[str, float, float], bool]] = None,
+    ) -> Transcript:
         """Turn a 16 kHz mono WAV file into text.
 
         ``bias_terms`` is a short vocabulary list from the Dictionary. Backends
         that cannot use it ignore it; none may fail because of it.
+
+        ``on_progress(text_so_far, seconds_done, total_seconds)`` is called as
+        the transcript accumulates, for backends that decode incrementally.
+        Returning ``False`` from it asks the backend to stop early, which is
+        how cancelling a long import works. ``total_seconds`` is 0.0 when the
+        length is unknown, meaning the bar should be indeterminate.
         """
 
     @abc.abstractmethod

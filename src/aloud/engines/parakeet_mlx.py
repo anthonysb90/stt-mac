@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 from .base import EngineError, Transcript, TranscriptionEngine
 
@@ -77,7 +77,13 @@ class ParakeetMLXEngine(TranscriptionEngine):
         except EngineError as exc:
             log.warning("Parakeet warm-up failed: %s", exc)
 
-    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+    def transcribe(
+        self,
+        wav_path: Path,
+        *,
+        bias_terms: Sequence[str] = (),
+        on_progress: Optional[Callable[[str, float, float], bool]] = None,
+    ) -> Transcript:
         del bias_terms  # unsupported by this decoder; see `supports_bias`
         model = self._load()
         started = time.monotonic()

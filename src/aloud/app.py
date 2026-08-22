@@ -16,13 +16,15 @@ about it.
 from __future__ import annotations
 
 import logging
+import shlex
 import subprocess
+import threading
 
 import AppKit
 import Foundation
 import objc
 
-from . import APP_NAME, __version__
+from . import APP_NAME, __version__, updates
 from .config import Config
 from .core import DictationController, State
 from .mainthread import run_on_main
@@ -49,6 +51,7 @@ class AloudDelegate(Foundation.NSObject):
         self.settings = None
         self.menu_bar = None
         self._transcript_windows = []
+        self._import_window = None
         return self
 
     # -- lifecycle ---------------------------------------------------------
@@ -56,7 +59,11 @@ class AloudDelegate(Foundation.NSObject):
     def applicationDidFinishLaunching_(self, _notification):
         app_menu.build({}, self)
 
-        self.main_window = MainWindow(self.controller, on_settings=self.showSettings_)
+        self.main_window = MainWindow(
+            self.controller,
+            on_settings=self.showSettings_,
+            on_transcribe=self._begin_import,
+        )
         self.settings = SettingsWindow(self.controller, on_hotkey_changed=self._hotkey_changed)
         self.menu_bar = MenuBarItem(
             self.controller,
@@ -127,6 +134,47 @@ class AloudDelegate(Foundation.NSObject):
         run_on_main(lambda: self._apply_state(state))
 
     @objc.python_method
+    def _begin_import(self, path) -> None:
+        """Open the progress window first, then start the work.
+
+        In that order because preparing the file can itself fail, and a failure
+        with nowhere to appear is how you get a silent no-op.
+        """
+        window = transcript_window.TranscriptWindow(
+            path.name, on_cancel=self.controller.cancel_import
+        )
+        self._import_window = window
+        self._transcript_windows.append(window)
+        window.show()
+        window.begin("Reading the file…")
+        self.controller.transcribe_file(path)
+
+    @objc.python_method
+    def on_job_started(self, job) -> None:
+        if job.source != "file" or self._import_window is None:
+            return
+        streaming = getattr(self.controller.engine, "supports_progress", False)
+        detail = "Transcribing…" if streaming else (
+            f"Transcribing with {self.controller.engine.label} — "
+            f"this engine reports no progress until it finishes."
+        )
+        run_on_main(lambda: self._import_window.begin(detail))
+
+    @objc.python_method
+    def on_progress(self, job, text, done, total) -> None:
+        if job.source != "file" or self._import_window is None:
+            return
+        window = self._import_window
+        run_on_main(lambda: window.update(text, done, total))
+
+    @objc.python_method
+    def on_cancelled(self, job) -> None:
+        window = self._import_window
+        self._import_window = None
+        if window is not None:
+            run_on_main(window.cancelled)
+
+    @objc.python_method
     def on_result(self, dictation) -> None:
         run_on_main(lambda: self._deliver_result(dictation))
 
@@ -135,25 +183,30 @@ class AloudDelegate(Foundation.NSObject):
         self.main_window.on_result()
         if dictation.source != "file":
             return
-        # An imported transcript was not typed anywhere, so it needs somewhere
-        # to be. Held in a list because AppKit keeps only a weak reference and
-        # a collected window closes itself.
-        window = transcript_window.TranscriptWindow(dictation)
-        window.copy()
-        self._transcript_windows.append(window)
-        window.show()
+        window, self._import_window = self._import_window, None
+        if window is None:
+            # Started from somewhere without a window — give it one.
+            window = transcript_window.TranscriptWindow(dictation.label or "Transcript")
+            self._transcript_windows.append(window)
+            window.show()
+        window.finish(dictation)
 
     @objc.python_method
     def on_empty(self, job) -> None:
         if job.source != "file":
             return
-        run_on_main(lambda: self._alert(
-            "Nothing to transcribe",
-            f"No speech was recognised in {job.label}.",
-        ))
+        window, self._import_window = self._import_window, None
+        if window is not None:
+            run_on_main(lambda: window.fail(f"No speech was recognised in {job.label}."))
 
     @objc.python_method
     def on_error(self, title: str, message: str) -> None:
+        window, self._import_window = self._import_window, None
+        if window is not None:
+            # An import failure belongs in the window watching that import,
+            # not in a modal alert on top of it.
+            run_on_main(lambda: window.fail(f"{title}: {message}"))
+            return
         run_on_main(lambda: self._alert(title, message))
 
     @objc.python_method
@@ -193,9 +246,11 @@ class AloudDelegate(Foundation.NSObject):
         self.main_window.show_pane(1)
 
     def transcribeFile_(self, _sender):
+        """File > Transcribe Audio File… — the menu route into the same flow."""
+        self.main_window.show_transcribe()
         path = transcript_window.open_panel()
         if path is not None:
-            self.controller.transcribe_file(path)
+            self.main_window.transcribe.select(path)
 
     def startDictation_(self, _sender):
         self.controller.begin_recording()
@@ -220,6 +275,89 @@ class AloudDelegate(Foundation.NSObject):
 
     def openLog_(self, _sender):
         subprocess.run(["open", "-t", str(LOG_FILE)], check=False)
+
+    def checkForUpdates_(self, _sender):
+        """Aloud > Check for Updates… — asks the remote, then offers to apply."""
+        self._run_off_main(self._check_for_updates)
+
+    @objc.python_method
+    def _check_for_updates(self) -> None:
+        status = updates.check()
+        run_on_main(lambda: self._present_update(status))
+
+    @objc.python_method
+    def _present_update(self, status) -> None:
+        if not status.checked and not status.is_git:
+            if self._confirm("Connect Aloud to its repository?", status.detail,
+                             confirm="Connect"):
+                ok, detail = updates.adopt()
+                self._alert("Connected" if ok else "Could not connect", detail)
+                if ok:
+                    self._run_off_main(self._check_for_updates)
+            return
+
+        if not status.checked:
+            self._alert("Could not check for updates", status.detail)
+            return
+
+        if not status.available:
+            self._alert(status.headline, f"You are on {status.current}.")
+            return
+
+        detail = f"You are on {status.current}; {status.latest} is available."
+        if status.summary:
+            detail += "\n\n" + "\n".join(f"• {line}" for line in status.summary)
+        if status.dirty:
+            detail += (
+                "\n\nThere are uncommitted changes in the Aloud folder, so "
+                "updating would overwrite them. Nothing will be changed."
+            )
+            self._alert(status.headline, detail)
+            return
+
+        if not self._confirm(status.headline, detail, confirm="Update"):
+            return
+
+        ok, message = updates.apply()
+        if not ok:
+            self._alert("Update failed", message)
+            return
+
+        rebuild = updates.needs_rebuild(status)
+        note = message + (
+            "\n\nThis update changed the build, so run `make install` in the "
+            "Aloud folder afterwards." if rebuild else ""
+        )
+        if self._confirm("Updated", note + "\n\nRestart Aloud now?", confirm="Restart"):
+            self._restart()
+
+    @objc.python_method
+    def _restart(self) -> None:
+        bundle = AppKit.NSBundle.mainBundle().bundlePath()
+        if bundle and bundle.endswith(".app"):
+            # A beat, so this process is gone before the new one starts.
+            subprocess.Popen(["/bin/sh", "-c", f"sleep 1; open -n {shlex.quote(bundle)}"])
+        else:
+            self._alert(
+                "Restart Aloud",
+                "Quit and run it again to pick up the update.",
+            )
+            return
+        AppKit.NSApplication.sharedApplication().terminate_(None)
+
+    @objc.python_method
+    def _run_off_main(self, work) -> None:
+        """Network and git calls must not block the UI thread."""
+        threading.Thread(target=work, daemon=True).start()
+
+    @objc.python_method
+    def _confirm(self, title: str, message: str, confirm: str = "OK") -> bool:
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(message)
+        alert.addButtonWithTitle_(confirm)
+        alert.addButtonWithTitle_("Cancel")
+        return alert.runModal() == AppKit.NSAlertFirstButtonReturn
 
     def showAbout_(self, _sender):
         ok, detail = self.controller.engine.check()

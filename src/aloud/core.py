@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import corrections, engines, history, hotkey as hotkey_mod, media
+from . import audio
 from .audio import AudioError, Recorder, wav_duration
 from .config import Config
 from .corrections import CorrectionResult
@@ -104,6 +105,9 @@ class Observer:
 
     def on_state(self, state: State) -> None: ...
     def on_result(self, dictation: Dictation) -> None: ...
+    def on_progress(self, job: "Job", text: str, done: float, total: float) -> None: ...
+    def on_job_started(self, job: "Job") -> None: ...
+    def on_devices_changed(self) -> None: ...
     def on_error(self, title: str, message: str) -> None: ...
     def on_dictionary_changed(self) -> None: ...
 
@@ -141,6 +145,7 @@ class DictationController:
         self._worker: Optional[threading.Thread] = None
         self._max_duration_timer: Optional[threading.Timer] = None
         self._last: Optional[Dictation] = None
+        self._cancel_current = threading.Event()
 
     # -- observers ---------------------------------------------------------
 
@@ -310,16 +315,40 @@ class DictationController:
     #: Tests drive one job at a time rather than starting the worker thread.
     _drain_one_for_test = _run_job
 
+    def cancel_import(self) -> None:
+        """Ask a running file transcription to stop at the next segment."""
+        self._cancel_current.set()
+
     def _transcribe_and_deliver(self, job: Job) -> None:
         wav_path = job.audio
         started = time.monotonic()
-        transcript = self.engine.transcribe(wav_path, bias_terms=self.bias_terms())
+        self._cancel_current.clear()
+        self._emit("on_job_started", job)
+
+        # Only files stream. A dictation is a few seconds long, and reporting
+        # progress on it would cost more than it tells anyone.
+        def report(text: str, done: float, total: float) -> bool:
+            self._emit("on_progress", job, text, done, total)
+            return not self._cancel_current.is_set()
+
+        streaming = job.source == "file" and getattr(self.engine, "supports_progress", False)
+        transcript = self.engine.transcribe(
+            wav_path,
+            bias_terms=self.bias_terms(),
+            on_progress=report if streaming else None,
+        )
 
         # Corrections run on the raw transcript, before any other cleanup, so
         # the offsets they report point at what the engine actually produced.
         result = self.corrections_for(transcript.text)
         text = process(result.text, self.postprocess_options())
         elapsed = time.monotonic() - started
+
+        if self._cancel_current.is_set() and job.source == "file":
+            log.info("Import of %s cancelled", job.label)
+            self._set_state(State.IDLE)
+            self._emit("on_cancelled", job)
+            return
 
         if not text:
             log.info("Nothing recognised in %s", job.label or "the recording")
@@ -447,6 +476,20 @@ class DictationController:
         return self._ruleset.apply(text)
 
     # -- engine ------------------------------------------------------------
+
+    # -- input device ------------------------------------------------------
+
+    def input_device(self):
+        """Whatever the config says to record from. None means system default."""
+        return self.config.get("audio.device")
+
+    def set_input_device(self, device) -> None:
+        """Switch microphones. Takes effect on the next recording, not this one."""
+        self.config.set("audio.device", device)
+        self.config.save()
+        self.recorder.device = device
+        log.info("Input device set to %s", audio.describe_device(device))
+        self._emit("on_devices_changed")
 
     def use_engine(self, name: str) -> None:
         """Switch engines and pay the load cost now rather than mid-dictation."""

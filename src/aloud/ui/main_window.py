@@ -19,17 +19,18 @@ import AppKit
 import Foundation
 import objc
 
-from .. import APP_NAME
+from .. import APP_NAME, audio, media
 from ..core import State
 from ..hotkey import describe
 from . import components as C
 from . import tokens as T
 from .dictionary_view import DictionaryView
 from .history_view import HistoryView
-from .formatting import db_label
+from .transcribe_view import TranscribeView
+from .formatting import db_label, shorten as media_label
 from .meter import LevelMeter
 
-HISTORY, DICTIONARY = 0, 1
+HISTORY, DICTIONARY, TRANSCRIBE = 0, 1, 2
 
 STATE_COLOURS = {
     State.IDLE: T.STATUS_IDLE,
@@ -54,9 +55,11 @@ class _WindowDelegate(Foundation.NSObject):
 
 
 class MainWindow:
-    def __init__(self, controller, on_settings: Callable) -> None:
+    def __init__(self, controller, on_settings: Callable,
+                 on_transcribe: Callable) -> None:
         self.controller = controller
         self._on_settings = on_settings
+        self._on_transcribe = on_transcribe
         self._keeper: list = []
         self._pane = HISTORY
         self._has_been_placed = False
@@ -65,12 +68,14 @@ class MainWindow:
         self.dictionary = DictionaryView(
             controller.dictionary, on_changed=controller.reload_rules
         )
+        self.transcribe = TranscribeView(on_transcribe=on_transcribe)
 
         self.state_pill = C.label("Idle", T.TYPE_BODY_STRONG, T.STATUS_IDLE)
         self.meter = LevelMeter.alloc().initWithSource_(lambda: self.controller.level)
         self.meter_readout = C.label("—", T.TYPE_CAPTION, T.TEXT_TERTIARY, align="right")
         self.meter_readout.widthAnchor().constraintEqualToConstant_(T.METRIC["meter_readout_width"]).setActive_(True)
         self.hotkey_hint = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY)
+        self.device_popup = self._build_device_popup()
         self.record_button = C.button("Start Dictation", lambda _s: self.controller.toggle(),
                                       self._keeper, prominent=True)
 
@@ -92,7 +97,7 @@ class MainWindow:
         target = C.action(lambda sender: self.show_pane(sender.selectedSegment()))
         self._keeper.append(target)
         control = AppKit.NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
-            ["History", "Dictionary"],
+            ["History", "Dictionary", "Transcribe"],
             AppKit.NSSegmentSwitchTrackingSelectOne,
             target,
             b"invoke:",
@@ -100,6 +105,47 @@ class MainWindow:
         control.setSelectedSegment_(HISTORY)
         control.setTranslatesAutoresizingMaskIntoConstraints_(False)
         return control
+
+    def _build_device_popup(self) -> AppKit.NSPopUpButton:
+        return C.menu_popup(
+            self._build_device_menu, self._keeper,
+            width=T.METRIC["device_popup_width"],
+            tooltip="Which microphone to record from",
+        )
+
+    def _build_device_menu(self, menu) -> None:
+        menu.removeAllItems()
+        current = self.controller.input_device()
+        menu.addItem_(C.menu_item(
+            media_label(audio.describe_device(None)),
+            lambda: self.controller.set_input_device(None),
+            self._keeper, checked=current is None,
+        ))
+        devices = audio.list_input_devices()
+        if devices:
+            menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        for device in devices:
+            index = device["index"]
+            menu.addItem_(C.menu_item(
+                device["name"],
+                lambda i=index: self.controller.set_input_device(i),
+                self._keeper,
+                checked=(current == index or current == device["name"]),
+            ))
+        if not devices:
+            menu.addItem_(C.menu_item("No microphones found", None, self._keeper, enabled=False))
+        self._select_current_device(menu, current)
+
+    def _select_current_device(self, menu, current) -> None:
+        for item in menu.itemArray():
+            if item.state() == AppKit.NSControlStateValueOn:
+                self.device_popup.selectItem_(item)
+                return
+        if menu.numberOfItems():
+            self.device_popup.selectItemAtIndex_(0)
+
+    def on_devices_changed(self) -> None:
+        self._build_device_menu(self.device_popup.menu())
 
     def _transport(self) -> AppKit.NSView:
         meter_column = C.stack(
@@ -113,7 +159,8 @@ class MainWindow:
         self.meter.widthAnchor().constraintGreaterThanOrEqualToConstant_(T.METRIC["meter_width_min"]).setActive_(True)
 
         row = C.stack(
-            [self.state_pill, meter_column, C.spacer(), self.record_button],
+            [self.state_pill, meter_column, C.spacer(),
+             self.device_popup, self.record_button],
             vertical=False, spacing=T.SPACE["xl"],
         )
         self.state_pill.widthAnchor().constraintEqualToConstant_(T.METRIC["state_pill_width"]).setActive_(True)
@@ -153,9 +200,15 @@ class MainWindow:
         window.setBackgroundColor_(T.ns_color(T.BG_WINDOW))
         window.setTitlebarAppearsTransparent_(False)
 
+        surface = C.drop_surface(
+            handler=self.accept_drop,
+            accepts=media.is_supported,
+            content=root,
+        )
         host = AppKit.NSView.alloc().init()
         window.setContentView_(host)
-        host.addSubview_(root)
+        host.addSubview_(surface)
+        root = surface
         AppKit.NSLayoutConstraint.activateConstraints_([
             root.leadingAnchor().constraintEqualToAnchor_(host.leadingAnchor()),
             root.trailingAnchor().constraintEqualToAnchor_(host.trailingAnchor()),
@@ -170,11 +223,17 @@ class MainWindow:
 
     # -- panes -------------------------------------------------------------
 
+    def accept_drop(self, path) -> None:
+        """A file was dropped anywhere on the window."""
+        self.show_pane(TRANSCRIBE)
+        self.transcribe.select(path)
+
     def show_pane(self, index: int) -> None:
         self._pane = index
         self.segments.setSelectedSegment_(index)
         C.clear(self.pane_host)
-        pane = self.history if index == HISTORY else self.dictionary
+        pane = {HISTORY: self.history, DICTIONARY: self.dictionary,
+                TRANSCRIBE: self.transcribe}[index]
         pane.reload()
         self.pane_host.addArrangedSubview_(pane.view)
         pane.view.widthAnchor().constraintEqualToAnchor_(
@@ -205,6 +264,10 @@ class MainWindow:
     def on_dictionary_changed(self) -> None:
         if self._pane == DICTIONARY:
             self.dictionary.render()
+
+    def show_transcribe(self) -> None:
+        self.show()
+        self.show_pane(TRANSCRIBE)
 
     def refresh_hotkey(self) -> None:
         mode = str(self.controller.config.get("hotkey.mode", "hold"))

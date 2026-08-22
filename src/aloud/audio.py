@@ -191,12 +191,57 @@ def wav_duration(path: Path) -> float:
         return frames / float(rate)
 
 
-def list_input_devices() -> list[dict]:
-    """Every input-capable device, for the menu bar picker."""
-    import sounddevice as sd
+#: What the config means by "whatever the system is set to".
+SYSTEM_DEFAULT = None
 
-    devices = []
-    for index, info in enumerate(sd.query_devices()):
-        if info.get("max_input_channels", 0) > 0:
-            devices.append({"index": index, "name": info.get("name", f"Device {index}")})
-    return devices
+
+def list_input_devices() -> List[dict]:
+    """Every input-capable device, newest listing each time it is called.
+
+    Re-queried rather than cached because devices come and go: plugging in a
+    headset mid-session is exactly when someone reaches for this list.
+    Returns an empty list rather than raising if the audio stack is unhappy —
+    a picker with nothing in it is better than a menu that will not open.
+    """
+    try:
+        import sounddevice as sd
+
+        devices = []
+        for index, info in enumerate(sd.query_devices()):
+            if info.get("max_input_channels", 0) > 0:
+                devices.append({
+                    "index": index,
+                    "name": info.get("name") or f"Device {index}",
+                    "channels": info.get("max_input_channels", 0),
+                    "sample_rate": int(info.get("default_samplerate", 0) or 0),
+                })
+        return devices
+    except Exception as exc:
+        # Called every time a picker opens, so no traceback spam.
+        log.warning("Could not list input devices: %s", exc)
+        return []
+
+
+def default_input_device() -> Optional[dict]:
+    """The device macOS is currently set to use, if it can be determined."""
+    try:
+        import sounddevice as sd
+
+        index = sd.default.device[0]
+        if index is None or index < 0:
+            return None
+        info = sd.query_devices(index)
+        return {"index": index, "name": info.get("name") or f"Device {index}"}
+    except Exception:
+        return None
+
+
+def describe_device(device: object) -> str:
+    """A label for whatever is stored in the config."""
+    if device is SYSTEM_DEFAULT:
+        current = default_input_device()
+        return f"System Default ({current['name']})" if current else "System Default"
+    for entry in list_input_devices():
+        if entry["index"] == device or entry["name"] == device:
+            return entry["name"]
+    return f"{device} (not connected)"

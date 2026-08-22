@@ -49,6 +49,8 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
     app_menu = _submenu(main, APP_NAME)
     app_menu.addItem_(_item(f"About {APP_NAME}", b"showAbout:", target=target))
     app_menu.addItem_(AppKit.NSMenuItem.separatorItem())
+    app_menu.addItem_(_item("Check for Updates…", b"checkForUpdates:", target=target))
+    app_menu.addItem_(AppKit.NSMenuItem.separatorItem())
     app_menu.addItem_(_item("Settings…", b"showSettings:", ",", target=target))
     app_menu.addItem_(AppKit.NSMenuItem.separatorItem())
     app_menu.addItem_(_item("Open Dictionary File", b"openDictionaryFile:", target=target))

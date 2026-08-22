@@ -16,7 +16,25 @@ from .paths import CONFIG_FILE, ensure_dirs
 
 log = logging.getLogger(__name__)
 
+#: Bumped when a stored config needs adjusting rather than merely extending.
+#: Adding a key never needs this -- anything absent falls back to a default.
+#: It is for the other case: a default that was *wrong* and has to be corrected
+#: in files that already exist.
+SCHEMA_VERSION = 2
+
+#: (path, old default, new default). Applied only when the stored value still
+#: equals the old default, which is the closest we can get to "the user never
+#: chose this". A value they picked themselves is never overwritten.
+MIGRATIONS = {
+    2: [
+        # "Pop" is a hollow thunk and read as an error rather than as "done".
+        ("feedback.start_sound", "Tink", "Bottle"),
+        ("feedback.stop_sound", "Pop", "Glass"),
+    ],
+}
+
 DEFAULTS: Dict[str, Any] = {
+    "version": SCHEMA_VERSION,
     "hotkey": {
         # "hold"   -> record while the key is down (true push-to-talk)
         # "toggle" -> tap once to start, tap again to stop (hands-free)
@@ -167,8 +185,9 @@ class Config:
     def load(cls) -> "Config":
         ensure_dirs()
         if not CONFIG_FILE.exists():
-            cls(copy.deepcopy(DEFAULTS)).save()
-            return cls(copy.deepcopy(DEFAULTS))
+            fresh = cls(copy.deepcopy(DEFAULTS))
+            fresh.save()
+            return fresh
         try:
             user = json.loads(CONFIG_FILE.read_text())
         except (OSError, json.JSONDecodeError) as exc:
@@ -177,7 +196,34 @@ class Config:
         if not isinstance(user, dict):
             log.warning("%s is not a JSON object; using defaults", CONFIG_FILE)
             return cls(copy.deepcopy(DEFAULTS))
-        return cls(_deep_merge(DEFAULTS, user))
+
+        config = cls(_deep_merge(DEFAULTS, user))
+        if config.migrate(stored_version=int(user.get("version", 1) or 1)):
+            config.save()
+        return config
+
+    def migrate(self, stored_version: int) -> bool:
+        """Correct defaults that were wrong, without touching chosen values.
+
+        Merging a stored file over the defaults means a changed default never
+        reaches anyone who has already run the app -- their file still holds
+        the old value. That is right for settings they chose and wrong for
+        ones they never touched, which is the distinction this makes.
+        """
+        if stored_version >= SCHEMA_VERSION:
+            return False
+
+        migrated = []
+        for version in range(stored_version + 1, SCHEMA_VERSION + 1):
+            for path, was, now in MIGRATIONS.get(version, []):
+                if self.get(path) == was:
+                    self.set(path, now)
+                    log.info("Updated %s from %r to %r", path, was, now)
+                    migrated.append(path)
+        if migrated:
+            log.info("Migrated %d setting(s) to schema v%d", len(migrated), SCHEMA_VERSION)
+        self.set("version", SCHEMA_VERSION)
+        return True
 
     def save(self) -> None:
         ensure_dirs()

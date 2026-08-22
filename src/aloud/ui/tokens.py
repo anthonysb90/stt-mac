@@ -321,6 +321,8 @@ METRIC: Dict[str, float] = {
     "settings_height": 420,
     "meter_height": 6,
     "meter_height_large": 10,
+    "device_popup_width": 190,
+    "drop_zone_height": 180,
     "meter_width_min": 200,
     "meter_readout_width": 56,
     "state_pill_width": 104,

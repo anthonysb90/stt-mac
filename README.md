@@ -54,11 +54,23 @@ what to do.
   because whether the microphone is live is true regardless of what you are
   looking at.
 
-**Transcribe a file** (`⌘O`) — point it at an mp3, m4a, wav, or the audio track
-of a screen recording. Converted to 16 kHz mono first where ffmpeg allows, so
-it takes the same path a dictation does. The result opens in its own window,
-copyable and saveable, and is deliberately *not* typed into whatever app you
-had open.
+**Transcribe a file** — drag an mp3, m4a, wav, or a video onto the window, or
+`⌘O`. It shows you the length, size and format *before* you commit, because a
+two-hour recording and a two-minute one look identical in a file picker and
+only one is worth starting on a CPU-only Mac.
+
+The work then happens in its own window: a progress bar, and the words arriving
+as they are decoded. Watching the transcript build is the honest progress
+indicator — a bar alone cannot tell slow from stuck. When it finishes, the same
+window gains Copy and Save. The text is deliberately *not* typed into whatever
+app you had open.
+
+**Microphone** — pick the input from the transport strip or the menu bar. Both
+lists rebuild as they open, so a headset plugged in a moment ago is there.
+
+**Updating** — **Aloud → Check for Updates…** pulls and offers to relaunch. A
+copy installed from a zip can be attached to the repository in place, keeping
+its virtualenv and settings.
 
 **Settings** (`⌘,`) — the hotkey, the model, API keys for the cloud engines,
 and the start/stop sounds (which play as you pick them, since the only way to

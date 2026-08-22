@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 from ..corrections import bias_prompt
 from ..secrets import describe_source, read_key
@@ -67,7 +67,13 @@ class OpenAIEngine(TranscriptionEngine):
         source = describe_source(env_var, self.name)
         return True, f"{self.options.get('model', 'whisper-1')} via {self._base_url()} · key from {source}"
 
-    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+    def transcribe(
+        self,
+        wav_path: Path,
+        *,
+        bias_terms: Sequence[str] = (),
+        on_progress: Optional[Callable[[str, float, float], bool]] = None,
+    ) -> Transcript:
         ok, detail = self.check()
         if not ok:
             raise EngineError(detail)

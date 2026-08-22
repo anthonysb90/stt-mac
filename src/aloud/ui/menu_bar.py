@@ -17,6 +17,7 @@ import AppKit
 import Foundation
 
 from .. import APP_NAME
+from .. import audio
 from ..core import State
 from ..hotkey import describe
 from . import components as C
@@ -84,12 +85,43 @@ class MenuBarItem:
         item.setAttributedTitle_(_styled(title, T.TEXT_PRIMARY if handler else T.TEXT_SECONDARY))
         return item
 
+    def _microphone_item(self) -> AppKit.NSMenuItem:
+        holder = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Microphone", None, ""
+        )
+        holder.setSubmenu_(C.refreshing_menu(self._build_microphone_menu, self._keeper))
+        return holder
+
+    def _build_microphone_menu(self, menu) -> None:
+        """Rebuilt on every open, so a mic plugged in a moment ago is there."""
+        menu.removeAllItems()
+        current = self.controller.input_device()
+
+        menu.addItem_(C.menu_item(
+            audio.describe_device(None), lambda: self.controller.set_input_device(None),
+            self._keeper, checked=current is None,
+        ))
+        devices = audio.list_input_devices()
+        if devices:
+            menu.addItem_(AppKit.NSMenuItem.separatorItem())
+        for device in devices:
+            index = device["index"]
+            menu.addItem_(C.menu_item(
+                device["name"],
+                lambda i=index: self.controller.set_input_device(i),
+                self._keeper,
+                checked=(current == index or current == device["name"]),
+            ))
+        if not devices:
+            menu.addItem_(C.menu_item("No microphones found", None, self._keeper, enabled=False))
+
     def _rebuild(self) -> None:
         self.menu.removeAllItems()
         self.menu.addItem_(self.status_item)
         self.menu.addItem_(self.hotkey_item)
         self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self.menu.addItem_(self.toggle_item)
+        self.menu.addItem_(self._microphone_item())
         self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self.menu.addItem_(self._entry(f"Open {APP_NAME}", self.handlers["open_main"]))
         self.menu.addItem_(self._entry("Settings…", self.handlers["open_settings"]))

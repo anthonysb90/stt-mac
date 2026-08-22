@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
 from .base import Transcript, TranscriptionEngine
 
@@ -18,7 +18,13 @@ class MockEngine(TranscriptionEngine):
     label = "Mock (no model)"
     supports_bias = True
 
-    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+    def transcribe(
+        self,
+        wav_path: Path,
+        *,
+        bias_terms: Sequence[str] = (),
+        on_progress: Optional[Callable[[str, float, float], bool]] = None,
+    ) -> Transcript:
         started = time.monotonic()
         text = self.options.get("text", "This is mock transcription output.")
         return Transcript(

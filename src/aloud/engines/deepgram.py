@@ -49,7 +49,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..media import mime_type
 from ..secrets import describe_source, read_key
@@ -101,7 +101,13 @@ class DeepgramEngine(TranscriptionEngine):
             detail += " · keyterm prompting unavailable on this model"
         return True, detail
 
-    def transcribe(self, wav_path: Path, *, bias_terms: Sequence[str] = ()) -> Transcript:
+    def transcribe(
+        self,
+        wav_path: Path,
+        *,
+        bias_terms: Sequence[str] = (),
+        on_progress: Optional[Callable[[str, float, float], bool]] = None,
+    ) -> Transcript:
         ok, detail = self.check()
         if not ok:
             raise EngineError(detail)

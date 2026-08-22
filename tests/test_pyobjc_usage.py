@@ -132,11 +132,29 @@ def _selector_arity(name: str) -> int:
 
 
 def _objc_subclasses(tree):
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        if any(ast.unparse(base).startswith(OBJC_BASE_PREFIXES) for base in node.bases):
-            yield node
+    """Classes PyObjC will transform — including ones that inherit indirectly.
+
+    DropZone subclasses TokenBox, which subclasses NSView. PyObjC transforms it
+    exactly the same way, so a check that only looked for `AppKit.NS...` in the
+    bases would have silently stopped covering it.
+    """
+    classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    objc_names = set()
+    # Repeat until it settles, so a chain of any depth is caught.
+    for _ in range(len(classes) + 1):
+        grew = False
+        for node in classes:
+            if node.name in objc_names:
+                continue
+            for base in node.bases:
+                text = ast.unparse(base)
+                if text.startswith(OBJC_BASE_PREFIXES) or text in objc_names:
+                    objc_names.add(node.name)
+                    grew = True
+                    break
+        if not grew:
+            break
+    return [node for node in classes if node.name in objc_names]
 
 
 def _is_python_method(fn) -> bool:
@@ -216,3 +234,10 @@ def test_the_bundle_entry_point_forwards_its_arguments():
     source = (ROOT / "Aloud.py").read_text()
     assert "sys.argv[1:]" in source
     assert "psn_" in source, "Finder can append a -psn_ argument; tolerate it"
+
+
+def test_the_checker_follows_indirect_subclasses():
+    """Guard the guard: DropZone inherits NSView through TokenBox."""
+    tree = ast.parse((SRC / "ui" / "components.py").read_text())
+    names = {node.name for node in _objc_subclasses(tree)}
+    assert {"TokenBox", "DropZone"} <= names
