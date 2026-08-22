@@ -1,6 +1,5 @@
 """Start and stop cues — the only feedback you get while looking at another app."""
 
-import pytest
 
 from aloud import feedback
 from aloud.config import Config
