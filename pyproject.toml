@@ -14,6 +14,10 @@ dependencies = [
     "pyobjc-framework-AVFoundation>=10.3",
     "pyobjc-framework-ApplicationServices>=10.3",
     "sounddevice>=0.4.6",
+    # Imported directly, to download model weights with the real error visible
+    # rather than the one parakeet-mlx substitutes. Both local engines pull it
+    # in anyway; naming it means we do not depend on that staying true.
+    "huggingface-hub>=0.23",
     # Apple Silicon only: MLX has no x86_64 build.
     "parakeet-mlx>=0.5.0 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Intel default; also works on Apple Silicon if installed by hand.

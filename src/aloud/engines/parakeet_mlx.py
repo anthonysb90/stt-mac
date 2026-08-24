@@ -44,6 +44,10 @@ DEFAULT_STREAM_CHUNK_SECONDS = 10.0
 #: Every sample is a 16-bit signed integer, so this maps to -1.0..1.0.
 FULL_SCALE = 32768.0
 
+#: The only two files parakeet-mlx reads out of a model repository. Fetching
+#: just these skips the tokenizer and card files in some of the repos.
+MODEL_FILES = ("config.json", "model.safetensors")
+
 
 class _StreamingUnavailable(RuntimeError):
     """The installed parakeet-mlx does not expose the streaming API we use.
@@ -96,7 +100,14 @@ class ParakeetMLXEngine(TranscriptionEngine):
             )
         if self._load_error:
             return False, self._load_error
-        state = "loaded" if self._model is not None else "not loaded yet"
+        if self._model is not None:
+            state = "loaded"
+        elif Path(self._model_id()).expanduser().is_dir():
+            state = "local directory, not loaded yet"
+        elif self._cached():
+            state = "downloaded, not loaded yet"
+        else:
+            state = "not downloaded yet — ~2.4 GB on first use"
         return True, f"{self._model_id()} ({state})"
 
     def warm_up(self) -> None:
@@ -255,6 +266,84 @@ class ParakeetMLXEngine(TranscriptionEngine):
 
     # -- internals ---------------------------------------------------------
 
+    def _resolve(self, model_id: str) -> str:
+        """A local directory holding the model, downloading it if needed.
+
+        parakeet-mlx's ``from_pretrained`` wraps its Hugging Face download in a
+        bare ``except Exception`` and falls back to reading the id as a path on
+        disk. So *every* download failure -- no network, a 404, a gated repo, a
+        full disk -- arrives as::
+
+            [Errno 2] No such file or directory:
+            'mlx-community/parakeet-tdt-0.6b-v3/config.json'
+
+        which names neither the cause nor the fix, and reads like a bug in this
+        app. Downloading first means the real exception is the one that reaches
+        the user, and the path handed on is local so that fallback never fires.
+        """
+        path = Path(model_id).expanduser()
+        if path.is_dir():
+            return str(path)
+
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as exc:
+            raise EngineError(
+                "huggingface_hub is not installed, so the model cannot be "
+                "downloaded. Run scripts/bootstrap.sh."
+            ) from exc
+
+        try:
+            return str(snapshot_download(model_id, allow_patterns=list(MODEL_FILES)))
+        except Exception as exc:
+            raise EngineError(self._download_failure(model_id, exc)) from exc
+
+    @staticmethod
+    def _download_failure(model_id: str, exc: BaseException) -> str:
+        """Turn a Hugging Face failure into something worth reading.
+
+        Matching on the exception's class name rather than importing
+        huggingface_hub's error types: they move between versions, and a broken
+        import here would replace a bad message with a worse one.
+        """
+        kind = type(exc).__name__
+        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else kind
+
+        if "RepositoryNotFound" in kind or "EntryNotFound" in kind or "404" in detail:
+            return (
+                f"Hugging Face has no model called {model_id!r}. Check "
+                "engines.parakeet_mlx.model in config.json, or set it in "
+                "Settings → Model."
+            )
+        if "GatedRepo" in kind or "401" in detail or "403" in detail:
+            return (
+                f"{model_id} is gated: accept its licence on huggingface.co "
+                "and store a token with `huggingface-cli login`."
+            )
+        if "ConnectionError" in kind or "Timeout" in kind or "offline" in detail.lower():
+            return (
+                f"Could not reach Hugging Face to download {model_id}. The "
+                "weights are ~2.4 GB and are only fetched once; check the "
+                "network and try again."
+            )
+        if isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
+            return f"No disk space left to download {model_id} (~2.4 GB)."
+        return f"Could not download {model_id}: {kind}: {detail}"
+
+    def _cached(self) -> bool:
+        """Whether the weights are already on disk. Never raises."""
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(
+                self._model_id(),
+                allow_patterns=list(MODEL_FILES),
+                local_files_only=True,
+            )
+            return True
+        except Exception:
+            return False
+
     @staticmethod
     def _ffmpeg() -> Optional[str]:
         """Where ffmpeg is, or None.
@@ -289,11 +378,14 @@ class ParakeetMLXEngine(TranscriptionEngine):
             model_id = self._model_id()
             log.info("Loading Parakeet model %s (first run downloads it)", model_id)
             started = time.monotonic()
+
+            # Fetched here rather than left to from_pretrained; see _resolve.
+            source = self._resolve(model_id)
             try:
                 # Absolute import: the third-party package, not this module.
                 from parakeet_mlx import from_pretrained
 
-                self._model = from_pretrained(model_id)
+                self._model = from_pretrained(source)
             except Exception as exc:
                 self._load_error = f"Could not load {model_id}: {exc}"
                 raise EngineError(self._load_error) from exc

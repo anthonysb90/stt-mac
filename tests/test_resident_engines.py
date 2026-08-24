@@ -334,3 +334,147 @@ def test_parakeet_stream_chunk_seconds_rejects_nonsense():
         engine = pk_module.ParakeetMLXEngine({"stream_chunk_seconds": bad})
         assert engine._chunk_seconds() == pk_module.DEFAULT_STREAM_CHUNK_SECONDS
     assert pk_module.ParakeetMLXEngine({"stream_chunk_seconds": 4})._chunk_seconds() == 4.0
+
+
+# -- Parakeet: the model download, and its error messages -------------------
+
+
+class _HubStub:
+    """Stands in for huggingface_hub, which is not installed off a Mac."""
+
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def snapshot_download(self, repo_id, **kwargs):
+        self.calls.append((repo_id, kwargs))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+@pytest.fixture
+def hub(monkeypatch):
+    """Install a fake huggingface_hub and hand the test its stub."""
+    import sys
+    import types
+
+    def install(stub):
+        module = types.ModuleType("huggingface_hub")
+        module.snapshot_download = stub.snapshot_download
+        monkeypatch.setitem(sys.modules, "huggingface_hub", module)
+        return stub
+
+    return install
+
+
+def test_parakeet_downloads_only_the_files_it_reads(hub, tmp_path):
+    stub = hub(_HubStub(result=str(tmp_path)))
+    engine = pk_module.ParakeetMLXEngine()
+    assert engine._resolve("mlx-community/parakeet-tdt-0.6b-v3") == str(tmp_path)
+    repo_id, kwargs = stub.calls[0]
+    assert repo_id == "mlx-community/parakeet-tdt-0.6b-v3"
+    assert kwargs["allow_patterns"] == ["config.json", "model.safetensors"]
+
+
+def test_parakeet_uses_a_local_directory_untouched(hub, tmp_path):
+    """A model id that is a real folder must not go near the network."""
+    stub = hub(_HubStub(error=AssertionError("must not be called")))
+    engine = pk_module.ParakeetMLXEngine()
+    assert engine._resolve(str(tmp_path)) == str(tmp_path)
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (type("RepositoryNotFoundError", (Exception,), {})("404 Client Error"),
+         "no model called"),
+        (type("GatedRepoError", (Exception,), {})("403 Forbidden"),
+         "gated"),
+        (type("ConnectionError", (Exception,), {})("failed to connect"),
+         "Could not reach Hugging Face"),
+    ],
+)
+def test_parakeet_explains_why_a_download_failed(hub, error, expected):
+    """The whole point: parakeet-mlx would have reported none of these.
+
+    Its from_pretrained wraps the download in `except Exception` and retries
+    the model id as a local path, so every one of these arrives as
+    "[Errno 2] No such file or directory: 'mlx-community/parakeet-...'".
+    """
+    hub(_HubStub(error=error))
+    engine = pk_module.ParakeetMLXEngine()
+    with pytest.raises(EngineError) as caught:
+        engine._resolve("mlx-community/parakeet-tdt-0.6b-v3")
+    assert expected in str(caught.value)
+    assert "No such file or directory" not in str(caught.value)
+
+
+def test_parakeet_reports_a_full_disk_as_a_full_disk(hub):
+    error = OSError(28, "No space left on device")
+    hub(_HubStub(error=error))
+    with pytest.raises(EngineError) as caught:
+        pk_module.ParakeetMLXEngine()._resolve("mlx-community/parakeet-tdt-0.6b-v3")
+    assert "disk space" in str(caught.value)
+
+
+def test_parakeet_keeps_an_unrecognised_failure_intact(hub):
+    """An error we have no advice for must still say what actually happened."""
+    hub(_HubStub(error=ValueError("something entirely new")))
+    with pytest.raises(EngineError) as caught:
+        pk_module.ParakeetMLXEngine()._resolve("mlx-community/parakeet-tdt-0.6b-v3")
+    assert "something entirely new" in str(caught.value)
+    assert "ValueError" in str(caught.value)
+
+
+def test_parakeet_says_when_the_hub_is_not_installed(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    with pytest.raises(EngineError) as caught:
+        pk_module.ParakeetMLXEngine()._resolve("mlx-community/parakeet-tdt-0.6b-v3")
+    assert "huggingface_hub" in str(caught.value)
+
+
+def test_parakeet_check_reports_whether_the_weights_are_cached(hub, monkeypatch):
+    """`(not loaded yet)` said nothing about whether the download had happened."""
+    monkeypatch.setattr(pk_module, "supported", lambda: True)
+    monkeypatch.setattr(pk_module.importlib.util, "find_spec", lambda _n: object())
+    from aloud import media
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: "/opt/homebrew/bin/ffmpeg")
+
+    hub(_HubStub(error=Exception("not in cache")))
+    ok, detail = pk_module.ParakeetMLXEngine().check()
+    assert ok and "not downloaded yet" in detail
+
+    hub(_HubStub(result="/somewhere"))
+    ok, detail = pk_module.ParakeetMLXEngine().check()
+    assert ok and "downloaded, not loaded yet" in detail
+
+
+def test_parakeet_cache_check_never_raises(hub):
+    """check() runs on every menu open and must not be able to throw."""
+    hub(_HubStub(error=RuntimeError("boom")))
+    assert pk_module.ParakeetMLXEngine()._cached() is False
+
+
+def test_parakeet_load_goes_through_resolve():
+    """_resolve is the whole fix; from_pretrained(model_id) undoes it.
+
+    Handing the bare model id to from_pretrained puts the download back inside
+    parakeet-mlx's `except Exception`, where the real cause is discarded.
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(pk_module.__file__).with_suffix(".py").read_text()
+    load = next(
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "_load"
+    )
+    body = ast.unparse(load)
+    assert "self._resolve(model_id)" in body
+    assert "from_pretrained(source)" in body

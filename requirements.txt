@@ -10,6 +10,11 @@ pyobjc-framework-ApplicationServices>=10.3
 # unchanged on both Intel and Apple Silicon.
 sounddevice>=0.4.6
 
+# Model weights. Imported directly so a failed download reports its real cause
+# -- parakeet-mlx catches every download exception and retries the model id as
+# a local path, which turns "no network" into "no such file or directory".
+huggingface-hub>=0.23
+
 # --- transcription engines, selected per architecture -----------------------
 # Environment markers do the picking, so a single `pip install -r` is correct
 # on both machines.
