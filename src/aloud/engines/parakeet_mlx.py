@@ -19,7 +19,6 @@ import array
 import importlib.util
 import logging
 import platform
-import shutil
 import sys
 import threading
 import time
@@ -87,8 +86,14 @@ class ParakeetMLXEngine(TranscriptionEngine):
             return False, f"Needs Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ (running {have})."
         if importlib.util.find_spec("parakeet_mlx") is None:
             return False, "parakeet-mlx is not installed. Run scripts/bootstrap.sh."
-        if shutil.which("ffmpeg") is None:
-            return False, "ffmpeg not found (parakeet-mlx decodes audio with it). brew install ffmpeg"
+        if not self._ffmpeg():
+            return False, (
+                "ffmpeg not found (parakeet-mlx decodes audio with it). "
+                "Install it with `brew install ffmpeg`. If it is already "
+                "installed, its directory is missing from PATH — an app "
+                "launched from the Dock does not inherit your shell — so add "
+                "it under tools.path_extra in config.json."
+            )
         if self._load_error:
             return False, self._load_error
         state = "loaded" if self._model is not None else "not loaded yet"
@@ -249,6 +254,21 @@ class ParakeetMLXEngine(TranscriptionEngine):
         return [sample / FULL_SCALE for sample in pcm], rate
 
     # -- internals ---------------------------------------------------------
+
+    @staticmethod
+    def _ffmpeg() -> Optional[str]:
+        """Where ffmpeg is, or None.
+
+        Deliberately not a bare ``shutil.which``. That is what this used to be,
+        and it reported "not found" inside the app on a machine where the
+        terminal found it immediately: a Dock launch gets launchd's PATH, which
+        has no Homebrew prefix on it. ``media.ffmpeg_path`` looks in the
+        prefixes as well, and :mod:`aloud.toolpath` puts them on PATH at
+        startup so parakeet-mlx's own subprocess call finds it too.
+        """
+        from ..media import ffmpeg_path
+
+        return ffmpeg_path()
 
     def _model_id(self) -> str:
         return str(self.options.get("model") or DEFAULT_MODEL)

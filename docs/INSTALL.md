@@ -566,8 +566,22 @@ code.
 Almost always Python: it needs 3.10+ and macOS ships 3.9. Redo step 3, then
 re-run bootstrap with `PYTHON_BIN=` pointing at the newer Python.
 
-**"ffmpeg not found".**
-`brew install ffmpeg`. Parakeet decodes audio through it.
+**"ffmpeg not found" — but `which ffmpeg` answers fine.**
+The app was launched from the Dock, and a Dock launch inherits none of your
+shell: its `PATH` is `/usr/bin:/bin:/usr/sbin:/sbin`, which has no Homebrew
+prefix on it. Aloud adds the usual prefixes at startup, so this should not
+happen any more; if it does, your ffmpeg is somewhere unusual. Find it and add
+its **directory** to `config.json`:
+
+```json
+"tools": { "path_extra": ["/somewhere/unusual/bin"] }
+```
+
+`make doctor` prints the ffmpeg it resolved, or `not found`.
+
+**"ffmpeg not found" and it really is missing.**
+`brew install ffmpeg`. Parakeet decodes audio through it, so on Apple Silicon
+it is a hard requirement, not an optional extra.
 
 **The first dictation after opening the app is slow.**
 That is the model loading, once. `make warm` pays it up front. The engine line

@@ -31,12 +31,34 @@ def test_parakeet_reports_a_missing_package(monkeypatch):
 
 
 def test_parakeet_reports_missing_ffmpeg(monkeypatch):
+    from aloud import media
+
     monkeypatch.setattr(pk_module, "supported", lambda: True)
     monkeypatch.setattr(pk_module.importlib.util, "find_spec", lambda _name: object())
-    monkeypatch.setattr(pk_module.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: None)
     ok, detail = pk_module.ParakeetMLXEngine().check()
     assert not ok
     assert "ffmpeg" in detail
+    # Telling someone to install what they already installed wastes their time.
+    assert "PATH" in detail
+
+
+def test_parakeet_finds_ffmpeg_outside_the_shell_path(monkeypatch):
+    """A Dock launch has no Homebrew prefix on PATH; `which` alone said no.
+
+    That is not hypothetical: it shipped, and produced "ffmpeg not found" in
+    the app on a machine whose terminal found ffmpeg instantly.
+    """
+    from aloud import media
+
+    monkeypatch.setattr(pk_module, "supported", lambda: True)
+    monkeypatch.setattr(pk_module.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(media.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        media.Path, "is_file", lambda self: str(self) == "/opt/homebrew/bin/ffmpeg"
+    )
+    ok, _detail = pk_module.ParakeetMLXEngine().check()
+    assert ok, "the Homebrew prefix must be searched directly"
 
 
 def test_parakeet_uses_the_configured_model_id():

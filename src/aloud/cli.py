@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import APP_NAME, __version__, build_id, engines, logging_setup
+from . import APP_NAME, __version__, build_id, engines, logging_setup, toolpath
 from .config import Config
 from .paths import CONFIG_FILE, LOG_FILE, ensure_dirs
 
@@ -32,6 +32,11 @@ def _cmd_doctor(config: Config) -> int:
     print(f"  log         {LOG_FILE}")
     print(f"  hotkey      {config.get('hotkey.mode')} {describe(config.get('hotkey.key'))}")
     print(f"  permissions {permissions.summary()}")
+    # Printed because the app and the terminal can disagree about this, and
+    # when they do the app says "ffmpeg not found" on a machine that has it.
+    from .media import ffmpeg_path
+
+    print(f"  ffmpeg      {ffmpeg_path() or 'not found'}")
     print("  dock icon   "
           + ("shown" if config.get("interface.dock_icon", True)
              else "hidden (menu bar only)"))
@@ -158,6 +163,9 @@ def main(argv: list[str] | None = None) -> int:
     ensure_dirs()
     config = Config.load()
     logging_setup.configure(config.get("logging.level", "INFO"))
+    # Before any engine is built: `check()` asks whether ffmpeg exists, and the
+    # answer has to be the same here as it is in the app.
+    toolpath.repair(config.get("tools.path_extra", []))
 
     if args.command == "doctor":
         return _cmd_doctor(config)

@@ -24,7 +24,7 @@ import AppKit
 import Foundation
 import objc
 
-from . import APP_NAME, __version__, updates
+from . import APP_NAME, __version__, toolpath, updates
 from .config import Config
 from .core import DictationController, State
 from .mainthread import run_on_main
@@ -419,6 +419,10 @@ class AloudDelegate(Foundation.NSObject):
 
 def run(config: Config) -> int:
     """Start the app. Blocks until the user quits."""
+    # First, before an engine can be built or a tool looked for. A Dock launch
+    # inherits none of the shell's PATH, so without this Homebrew's ffmpeg is
+    # invisible -- to us and to the libraries that shell out to it themselves.
+    toolpath.repair(config.get("tools.path_extra", []))
     app = AppKit.NSApplication.sharedApplication()
     # Regular by default -- Dock icon, app menu, a place in the switcher. Set
     # interface.dock_icon to false for the menu-bar-only shape; see ui/dock.py

@@ -295,7 +295,13 @@ warm` pays it up front; the menu bar engine line says `loaded` once it's done.
 **"parakeet-mlx is not installed" on the M1.** Almost always Python: it needs
 3.10+, and macOS ships 3.9. See [Requirements](#requirements).
 
-**"ffmpeg not found".** `brew install ffmpeg` — Parakeet decodes audio with it.
+**"ffmpeg not found" when `which ffmpeg` works.** A Dock launch inherits none
+of your shell, so Homebrew's prefix is not on the app's `PATH`. Aloud adds the
+usual prefixes at startup; if yours is elsewhere, put its directory in
+`tools.path_extra` in `config.json`. `make doctor` prints what it resolved.
+
+**"ffmpeg not found" and it is genuinely absent.** `brew install ffmpeg` —
+Parakeet decodes audio with it.
 
 **"whisper-cli not found".** Only relevant if you selected `whisper_cpp`.
 `./scripts/bootstrap.sh --with-whisper-cpp`, or set

@@ -1,0 +1,124 @@
+"""PATH repair, and the bug it exists for.
+
+An app launched from the Dock inherits launchd's PATH — `/usr/bin:/bin:
+/usr/sbin:/sbin` — not your shell's. Homebrew installs to `/opt/homebrew/bin`
+on Apple Silicon and `/usr/local/bin` on Intel, and neither is on that list. So
+`aloud doctor` in Terminal reported ffmpeg found and the engine ready, while
+the same build in /Applications put up "Transcription failed: ffmpeg not
+found". That shipped.
+
+Finding an absolute path ourselves is not enough on its own: parakeet-mlx runs
+ffmpeg from inside the library, and the only channel to a subprocess we do not
+spawn is the environment it inherits.
+"""
+
+import ast
+import os
+from pathlib import Path
+
+import pytest
+
+from aloud import toolpath
+
+SRC = Path(__file__).resolve().parent.parent / "src" / "aloud"
+
+#: The PATH a Dock launch actually gets.
+LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+
+@pytest.fixture
+def dock_launch(monkeypatch, tmp_path):
+    """A minimal PATH, and a stand-in Homebrew prefix that really exists."""
+    brew = tmp_path / "opt" / "homebrew" / "bin"
+    brew.mkdir(parents=True)
+    monkeypatch.setenv("PATH", LAUNCHD_PATH)
+    monkeypatch.setattr(toolpath, "TOOL_DIRS", (str(brew), "/usr/bin"))
+    return brew
+
+
+def test_a_missing_tool_directory_is_added(dock_launch):
+    added = toolpath.repair()
+    assert str(dock_launch) in added
+    assert str(dock_launch) in os.environ["PATH"].split(os.pathsep)
+
+
+def test_directories_that_do_not_exist_are_skipped(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", LAUNCHD_PATH)
+    monkeypatch.setattr(toolpath, "TOOL_DIRS", (str(tmp_path / "nowhere"),))
+    assert toolpath.repair() == []
+    assert os.environ["PATH"] == LAUNCHD_PATH
+
+
+def test_what_was_already_there_keeps_its_place(dock_launch):
+    """Appending, not prepending: a deliberate PATH entry still wins."""
+    toolpath.repair()
+    parts = os.environ["PATH"].split(os.pathsep)
+    assert parts[: len(LAUNCHD_PATH.split(":"))] == LAUNCHD_PATH.split(":")
+
+
+def test_repairing_twice_changes_nothing(dock_launch):
+    toolpath.repair()
+    after_first = os.environ["PATH"]
+    assert toolpath.repair() == []
+    assert os.environ["PATH"] == after_first
+
+
+def test_extra_directories_come_first(monkeypatch, tmp_path):
+    """config's tools.path_extra is a deliberate choice, so it outranks guesses."""
+    mine = tmp_path / "mine"
+    theirs = tmp_path / "theirs"
+    mine.mkdir()
+    theirs.mkdir()
+    monkeypatch.setenv("PATH", LAUNCHD_PATH)
+    monkeypatch.setattr(toolpath, "TOOL_DIRS", (str(theirs),))
+    added = toolpath.repair([str(mine)])
+    assert added == [str(mine), str(theirs)]
+
+
+def test_blank_entries_are_ignored(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", LAUNCHD_PATH)
+    monkeypatch.setattr(toolpath, "TOOL_DIRS", ())
+    assert toolpath.repair(["", "   "]) == []
+
+
+def test_an_empty_path_is_survivable(monkeypatch, tmp_path):
+    brew = tmp_path / "bin"
+    brew.mkdir()
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr(toolpath, "TOOL_DIRS", (str(brew),))
+    toolpath.repair()
+    assert os.environ["PATH"] == str(brew)
+
+
+def test_both_homebrew_prefixes_are_covered():
+    """One per architecture. Missing either breaks that machine and no other."""
+    assert "/opt/homebrew/bin" in toolpath.TOOL_DIRS, "Apple Silicon"
+    assert "/usr/local/bin" in toolpath.TOOL_DIRS, "Intel"
+
+
+# -- the wiring, which is the part that actually fixes the bug --------------
+
+
+def _calls_repair(path: Path, function: str) -> bool:
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == function:
+            return "toolpath.repair" in ast.unparse(node)
+    raise AssertionError(f"{path.name} has no {function}()")
+
+
+def test_the_app_repairs_path_before_anything_else():
+    """This is the one that matters: the app is what has the broken PATH."""
+    assert _calls_repair(SRC / "app.py", "run")
+
+
+def test_the_cli_repairs_path_too():
+    """Otherwise `aloud doctor` and the app disagree about what is installed."""
+    assert _calls_repair(SRC / "cli.py", "main")
+
+
+def test_parakeet_does_not_ask_shutil_which_directly():
+    """`shutil.which` alone is exactly the check that reported a false negative."""
+    source = (SRC / "engines" / "parakeet_mlx.py").read_text()
+    assert 'shutil.which("ffmpeg")' not in source
+    assert "ffmpeg_path" in source

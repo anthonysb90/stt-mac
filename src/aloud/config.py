@@ -142,6 +142,14 @@ DEFAULTS: Dict[str, Any] = {
             "new paragraph": "\n\n",
         },
     },
+    "tools": {
+        # Extra directories to add to PATH at startup. An app launched from
+        # the Dock inherits none of your shell, so Homebrew's bin directory is
+        # not on its PATH -- which is why ffmpeg can be "not found" on a
+        # machine where `which ffmpeg` answers instantly. The usual prefixes
+        # are added automatically; this is for anywhere unusual.
+        "path_extra": [],
+    },
     "interface": {
         # False hides the Dock icon and the application menu, leaving the menu
         # bar item as the whole interface -- the classic background-utility
