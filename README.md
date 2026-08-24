@@ -30,10 +30,18 @@ same guide as a page you can follow on the machine itself —
 The short version:
 
 ```sh
-git clone <this repo> && cd stt-mac
+git clone -b claude/whispr-dictation-app-glvd1v \
+  https://github.com/anthonysb90/stt-mac.git aloud && cd aloud
 ./scripts/bootstrap.sh     # toolchain, engine for this Mac, model
 make install               # builds Aloud.app into /Applications
 ```
+
+> **The branch matters.** The code lives on
+> `claude/whispr-dictation-app-glvd1v`. `main` holds only this README, so a
+> plain `git clone` gives you a directory with no `scripts/` and no `Makefile`
+> — which shows up as *"no such file or directory: ./scripts/bootstrap.sh"*
+> followed by *"No rule to make target `install'"*. Merge the branch into
+> `main` if you would rather stop typing it.
 
 Then add Aloud under **System Settings → Privacy & Security → Accessibility**,
 quit it, and open it again. Hold **Right Option**, speak, release.

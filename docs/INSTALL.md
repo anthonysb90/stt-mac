@@ -131,12 +131,30 @@ $(brew --prefix)/bin/python3.12 --version
 
 ```sh
 mkdir -p ~/Developer && cd ~/Developer
-git clone https://github.com/anthonysb90/stt-mac.git aloud
+git clone -b claude/whispr-dictation-app-glvd1v \
+  https://github.com/anthonysb90/stt-mac.git aloud
 cd aloud
-git checkout claude/whispr-dictation-app-glvd1v
 ```
 
-Put it somewhere permanent. The app runs against this folder, so moving or
+**Do not drop the `-b`.** The code lives on that branch; `main` holds only the
+README. Clone without it and you get a folder containing one file, which shows
+up two commands later as:
+
+```
+zsh: no such file or directory: ./scripts/bootstrap.sh
+make: *** No rule to make target `install'.  Stop.
+```
+
+If that has already happened, you do not need to re-clone:
+
+```sh
+cd ~/Developer/aloud
+git fetch origin
+git checkout claude/whispr-dictation-app-glvd1v
+ls scripts/bootstrap.sh      # should print the path, not an error
+```
+
+Put the folder somewhere permanent. The app runs against it, so moving or
 deleting it later breaks the app.
 
 ### If git asks you to log in
