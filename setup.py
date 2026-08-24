@@ -24,6 +24,33 @@ built against is universal2 -- so build on each Mac. See docs/ARCHITECTURE.md.
 import os
 
 from setuptools import setup
+from setuptools.dist import Distribution
+
+
+class AppDistribution(Distribution):
+    """A Distribution that keeps ``install_requires`` away from py2app.
+
+    py2app refuses to run at all when ``install_requires`` is set:
+
+        error: install_requires is no longer supported
+
+    It is not wrong to refuse -- a bundle cannot resolve dependencies at build
+    time -- and this setup.py never sets the field. Modern setuptools does, by
+    copying ``[project] dependencies`` out of pyproject.toml onto the
+    Distribution even for a plain ``setup.py`` invocation. Older setuptools did
+    not, which is why the Intel Mac on Python 3.9 built happily and the M1 on
+    3.12 did not.
+
+    Both tools are right and they simply disagree, so the dependencies stay in
+    pyproject.toml -- that is what ``pip install -e .`` reads, and what
+    bootstrap.sh relies on -- and are dropped here, where only the bundle build
+    can see the difference. pip never goes through this file.
+    """
+
+    def parse_config_files(self, *args, **kwargs):
+        super().parse_config_files(*args, **kwargs)
+        self.install_requires = []
+
 
 APP_NAME = "Aloud"
 BUNDLE_ID = "com.aloud.Aloud"
@@ -90,12 +117,24 @@ OPTIONS = {
 if os.path.exists("assets/Aloud.icns"):
     OPTIONS["iconfile"] = "assets/Aloud.icns"
 
-setup(
-    name=APP_NAME,
-    version=VERSION,
-    app=APP,
-    options={"py2app": OPTIONS},
-    setup_requires=["py2app"],
-    package_dir={"": "src"},
-    packages=["aloud", "aloud.engines", "aloud.ui"],
-)
+
+def build() -> None:
+    setup(
+        name=APP_NAME,
+        version=VERSION,
+        app=APP,
+        options={"py2app": OPTIONS},
+        distclass=AppDistribution,
+        # No setup_requires: py2app comes from requirements-dev.txt, and asking
+        # setuptools to fetch it here goes through the deprecated build-egg
+        # path, which prints a wall of warnings before doing nothing useful.
+        package_dir={"": "src"},
+        packages=["aloud", "aloud.engines", "aloud.ui"],
+    )
+
+
+# Guarded so the tests can import this file and check AppDistribution without
+# kicking off a build. Both `python setup.py py2app` and a PEP 517 frontend run
+# it as "__main__", so nothing about the real builds changes.
+if __name__ == "__main__":
+    build()
