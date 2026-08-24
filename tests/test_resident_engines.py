@@ -478,3 +478,55 @@ def test_parakeet_load_goes_through_resolve():
     body = ast.unparse(load)
     assert "self._resolve(model_id)" in body
     assert "from_pretrained(source)" in body
+
+
+# -- Parakeet: cache first, network only when the weights are really missing -
+
+
+class _CacheAwareHub:
+    """A hub where the cache and the network can succeed independently."""
+
+    def __init__(self, cached=None, remote=None, remote_error=None):
+        self.cached = cached
+        self.remote = remote
+        self.remote_error = remote_error
+        self.calls = []
+
+    def snapshot_download(self, repo_id, **kwargs):
+        offline = kwargs.get("local_files_only", False)
+        self.calls.append("cache" if offline else "network")
+        if offline:
+            if self.cached is None:
+                raise FileNotFoundError("not in the cache")
+            return self.cached
+        if self.remote_error is not None:
+            raise self.remote_error
+        return self.remote
+
+
+def test_parakeet_uses_cached_weights_without_asking_the_network(hub, tmp_path):
+    """Once warmed, the app must not need a connection to start dictating."""
+    stub = hub(_CacheAwareHub(cached=str(tmp_path)))
+    engine = pk_module.ParakeetMLXEngine()
+    assert engine._resolve("mlx-community/parakeet-tdt-0.6b-v3") == str(tmp_path)
+    assert stub.calls == ["cache"], "a cache hit must end there"
+
+
+def test_parakeet_downloads_when_the_cache_is_empty(hub, tmp_path):
+    stub = hub(_CacheAwareHub(cached=None, remote=str(tmp_path)))
+    engine = pk_module.ParakeetMLXEngine()
+    assert engine._resolve("mlx-community/parakeet-tdt-0.6b-v3") == str(tmp_path)
+    assert stub.calls == ["cache", "network"]
+
+
+def test_parakeet_reports_the_download_error_not_the_cache_miss(hub):
+    """The cache miss is expected and says nothing; the download says why."""
+    hub(_CacheAwareHub(
+        cached=None,
+        remote_error=type("ConnectionError", (Exception,), {})("no route to host"),
+    ))
+    with pytest.raises(EngineError) as caught:
+        pk_module.ParakeetMLXEngine()._resolve("mlx-community/parakeet-tdt-0.6b-v3")
+    message = str(caught.value)
+    assert "Could not reach Hugging Face" in message
+    assert "not in the cache" not in message

@@ -267,19 +267,28 @@ class ParakeetMLXEngine(TranscriptionEngine):
     # -- internals ---------------------------------------------------------
 
     def _resolve(self, model_id: str) -> str:
-        """A local directory holding the model, downloading it if needed.
+        """A local directory holding the model. Cache first, network second.
 
-        parakeet-mlx's ``from_pretrained`` wraps its Hugging Face download in a
-        bare ``except Exception`` and falls back to reading the id as a path on
-        disk. So *every* download failure -- no network, a 404, a gated repo, a
-        full disk -- arrives as::
+        Two problems are being solved here, and they are not the same one.
+
+        The first is that parakeet-mlx's ``from_pretrained`` wraps its Hugging
+        Face download in a bare ``except Exception`` and falls back to reading
+        the model id as a path on disk. So *every* download failure -- no
+        network, a 404, a gated repo, a full disk -- arrives as::
 
             [Errno 2] No such file or directory:
             'mlx-community/parakeet-tdt-0.6b-v3/config.json'
 
         which names neither the cause nor the fix, and reads like a bug in this
-        app. Downloading first means the real exception is the one that reaches
-        the user, and the path handed on is local so that fallback never fires.
+        app. Resolving the model here means the real exception survives, and
+        the path handed on is local so that fallback can never fire.
+
+        The second is that a download is not supposed to happen at all once the
+        weights are cached, and asking the network anyway makes a working
+        offline app depend on a working connection. So the cache is consulted
+        first, on its own, and the network is touched only when the weights are
+        genuinely absent. That is also what makes this app local-first in the
+        sense that matters: after one warm-up it never calls out again.
         """
         path = Path(model_id).expanduser()
         if path.is_dir():
@@ -293,8 +302,18 @@ class ParakeetMLXEngine(TranscriptionEngine):
                 "downloaded. Run scripts/bootstrap.sh."
             ) from exc
 
+        patterns = list(MODEL_FILES)
         try:
-            return str(snapshot_download(model_id, allow_patterns=list(MODEL_FILES)))
+            local = snapshot_download(
+                model_id, allow_patterns=patterns, local_files_only=True
+            )
+            log.info("Using cached weights for %s", model_id)
+            return str(local)
+        except Exception as exc:  # noqa: BLE001 - a cache miss is not an error
+            log.info("%s is not cached (%s); downloading", model_id, type(exc).__name__)
+
+        try:
+            return str(snapshot_download(model_id, allow_patterns=patterns))
         except Exception as exc:
             raise EngineError(self._download_failure(model_id, exc)) from exc
 
