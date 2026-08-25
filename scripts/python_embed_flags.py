@@ -31,9 +31,10 @@ Two things come out of this:
    lives and what to link against.
 
 Homebrew's python@3.12 is a framework build (``--enable-framework``), so
-linking is `-framework Python`, not `-lpython3.12` -- the more common route
-for a non-framework build (Linux, or a python.org non-framework install) is
-kept as a fallback in case that ever isn't true on this machine.
+linking is against Python.framework's own versioned dylib by absolute path,
+not `-lpython3.12` -- the more common route for a non-framework build
+(Linux, or a python.org non-framework install) is kept as a fallback in
+case that ever isn't true on this machine.
 """
 
 from __future__ import annotations
@@ -58,8 +59,20 @@ def compile_and_link_flags() -> tuple[str, str]:
     framework_dir = sysconfig.get_config_var("PYTHONFRAMEWORKDIR")
     framework_prefix = sysconfig.get_config_var("PYTHONFRAMEWORKPREFIX")
     if framework_dir and framework_dir != "no-framework" and framework_prefix:
-        ldflags = f"-F{framework_prefix} -framework Python -Wl,-rpath,{framework_prefix}"
-        return cflags, ldflags
+        # Link against the versioned dylib by its absolute path, not
+        # `-framework Python`. `-framework` requires an intact
+        # Python.framework/Python -> Versions/Current/Python symlink chain
+        # at the *top* of the framework; Homebrew's layout does not
+        # reliably keep that, and ld then fails with "framework 'Python'
+        # not found" even though the real library sits right there.
+        # sys.base_prefix *is* .../Python.framework/Versions/X.Y for a
+        # framework build, and that directory's own "Python" file is the
+        # actual shared library -- guaranteed by the framework's own
+        # structure, regardless of any top-level symlink's state.
+        dylib = Path(sys.base_prefix) / "Python"
+        if dylib.exists():
+            ldflags = f"{dylib} -Wl,-rpath,{framework_prefix}"
+            return cflags, ldflags
 
     libdir = sysconfig.get_config_var("LIBDIR")
     ldlibrary = sysconfig.get_config_var("LDLIBRARY") or ""
