@@ -64,7 +64,7 @@ report: ## Collect everything needed to diagnose a launch failure
 .PHONY: diagnose
 diagnose: ## Run the installed app's binary directly to see the real error
 	@echo "==> /Applications/Aloud.app/Contents/MacOS/Aloud"
-	@echo "    A py2app 'Launch error' dialog is a traceback that got swallowed."
+	@echo "    A Dock double-click that fails silently swallows the traceback."
 	@echo "    This prints it. Ctrl-C to stop once the app is running."
 	@echo
 	@/Applications/Aloud.app/Contents/MacOS/Aloud || true

@@ -4,10 +4,26 @@
 #
 #   ./scripts/install_app.sh
 #
-# Exists because `cp -R dist/Aloud.app /Applications/` is wrong when the
-# destination already exists: cp copies *into* it, leaving the old bundle in
-# place with the new one nested inside. This removes the old one first, then
-# proves the result actually starts before claiming success.
+# Hand-assembled, not py2app. py2app's alias build symlinks
+# Contents/Frameworks/Python.framework and Contents/MacOS/python back out to
+# Homebrew and to this checkout. codesign refuses any symlink whose
+# destination leaves the bundle ("invalid destination for symbolic link in
+# bundle"), so that bundle can never verify -- and confirmed directly on
+# hardware, macOS will not hold an Accessibility grant against a signature
+# that does not verify. Neither copying nor deleting those two symlinks works
+# either: CPython finds its standard library by resolving its own
+# executable's symlink at startup (a copy breaks that), and py2app's own
+# stub reads Contents/MacOS/python's path at launch and crashes if it is gone.
+#
+# So instead: Contents/MacOS/Aloud is a tiny compiled trampoline
+# (scripts/launcher.c) that execs a *complete, fully dereferenced copy* of
+# the working .venv, placed at Contents/Resources/venv. No symlinks anywhere
+# in the bundle -- nothing for codesign to object to -- and the interpreter
+# that ends up running is a real, ordinary venv, structurally identical to
+# the one `make run` already uses successfully, just living inside the
+# bundle instead of the checkout. See scripts/launcher.c for why this also
+# keeps the Dock icon and app identity correct, which a bare `execv` to an
+# *external* interpreter would not.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -21,16 +37,17 @@ die()   { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
 field() { printf '    %-22s %s\n' "$1" "$2"; }
 
 [ -x .venv/bin/python ] || die "No .venv — run ./scripts/bootstrap.sh first."
+command -v clang >/dev/null 2>&1 \
+  || die "No clang — install the Xcode Command Line Tools: xcode-select --install"
 
 # Nothing below touches /Applications until a new bundle has been built,
-# signed and verified. The old order removed the installed app first, so any
-# later failure left the Mac with no app at all -- which is how a signature
-# check that correctly refused a bad bundle also uninstalled a working one.
-# Build first, prove it, then swap.
+# signed and verified. Build first, prove it, then swap.
 
-# --- 1. Build --------------------------------------------------------------
-info "Building"
+# --- 1. Assemble the bundle skeleton -----------------------------------
+info "Assembling the bundle"
 rm -rf build dist
+mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
+
 ICONERR="$(mktemp -t aloud-icon)"
 if ./scripts/make_icns.sh >"$ICONERR" 2>&1; then
   rm -f "$ICONERR"
@@ -39,42 +56,73 @@ else
   sed 's/^/    /' "$ICONERR" >&2
   rm -f "$ICONERR"
 fi
-./.venv/bin/python setup.py py2app -A >/tmp/aloud-build.log 2>&1 || {
-  printf '\033[1;31m==>\033[0m Build failed:\n' >&2
-  tail -30 /tmp/aloud-build.log | sed 's/^/    /' >&2
+if [ -f assets/Aloud.icns ]; then
+  cp assets/Aloud.icns "$BUILT/Contents/Resources/Aloud.icns"
+fi
+
+./.venv/bin/python scripts/write_plist.py "$BUILT/Contents/Info.plist" \
+  || die "Could not write Info.plist"
+
+# --- 2. Compile the launcher ---------------------------------------------
+# Finds its own path at runtime and execs Contents/Resources/venv/bin/python
+# -m aloud, forwarding every argument. See scripts/launcher.c for the reason
+# this exists instead of py2app's embedded-Python stub.
+info "Compiling the launcher"
+CLANGERR="$(mktemp -t aloud-clang)"
+if ! clang -O2 -Wall -o "$BUILT/Contents/MacOS/Aloud" scripts/launcher.c 2>"$CLANGERR"; then
+  printf '\033[1;31m==>\033[0m The launcher would not compile:\n\n' >&2
+  sed 's/^/    /' "$CLANGERR" >&2
+  rm -f "$CLANGERR"
   exit 1
-}
-[ -d "$BUILT" ] || die "py2app did not produce $BUILT"
+fi
+rm -f "$CLANGERR"
 
-# --- 2. Tidy the bundle ----------------------------------------------------
-# Dangling links only. They point at nothing, so removing them is free, and
-# codesign reports one as the whole bundle being absent ("No such file or
-# directory" about a bundle plainly present).
-#
-# The outward-pointing links are LEFT ALONE, and that is deliberate. codesign
-# refuses to seal them, so the signature will not verify -- but every attempt
-# to satisfy it broke the app instead:
-#
-#   copying Contents/MacOS/python  -> ModuleNotFoundError: no module 'encodings'
-#     (a virtualenv python finds its stdlib by resolving its own symlink)
-#   deleting Contents/MacOS/python -> SIGSEGV in py2app_main
-#     (CFStringGetCString on NULL; the stub requires the file)
-#
-# An alias build is made of links leaving the bundle. A bundle that runs beats
-# a bundle that verifies, so ALOUD_FLATTEN=1 exists for experimenting and is
-# off by default.
-info "Removing dangling symlinks"
-FLATTEN_ARGS=""
-[ "${ALOUD_FLATTEN:-0}" = "1" ] && FLATTEN_ARGS="--copy-outward"
-./.venv/bin/python scripts/flatten_bundle.py "$BUILT" $FLATTEN_ARGS \
-  || die "Could not tidy $BUILT"
+# --- 3. Copy the venv, dereferencing every symlink -----------------------
+# `-L` is the whole point: `.venv/bin/python` is normally a symlink to
+# Homebrew's real interpreter, and py2app's alias build left it that way,
+# which is exactly what codesign refuses. `cp -L` follows it and copies the
+# real file instead, landing at the same relative name ("python") with the
+# real bytes -- so the copy is a complete, ordinary venv with no symlinks in
+# it, structurally identical to (and exactly as functional as) the one
+# `make run` already uses, just relocated. Its own pyvenv.cfg still points
+# at Homebrew for the standard library (an ordinary external file read at
+# runtime, not a symlink -- codesign has no opinion about that), and its own
+# site-packages -- MLX, faster-whisper, PyObjC, everything -- comes along in
+# the copy, so nothing is missing.
+info "Copying the virtualenv into the bundle (this takes a while)"
+COPYERR="$(mktemp -t aloud-venvcopy)"
+if ! cp -RL .venv "$BUILT/Contents/Resources/venv" 2>"$COPYERR"; then
+  printf '\033[1;31m==>\033[0m Could not copy the virtualenv:\n\n' >&2
+  sed 's/^/    /' "$COPYERR" >&2
+  rm -f "$COPYERR"
+  exit 1
+fi
+rm -f "$COPYERR"
+[ -x "$BUILT/Contents/Resources/venv/bin/python" ] \
+  || die "The copied venv has no working bin/python"
 
-# --- 3. Sign ---------------------------------------------------------------
+# --- 4. Sign ---------------------------------------------------------------
 # Prefer a stable identity over ad-hoc. Ad-hoc signing derives the app's code
 # identity from a hash of its contents, so every rebuild is a different app to
 # macOS and the Accessibility grant made against the last build silently stops
 # applying -- while still showing as enabled in System Settings, which is what
 # makes it so hard to diagnose. scripts/make_signing_cert.sh creates one.
+#
+# Both the launcher AND the copied interpreter are signed with this identity.
+# The launcher execs the interpreter, replacing its own process image with
+# it -- so whichever binary is actually running when Aloud calls
+# CGEventTapCreate is the one TCC evaluates, and that is the copied python,
+# not the launcher. Leaving the interpreter with Homebrew's own original
+# signature would mean the Accessibility grant has to attach to *that*
+# identity instead, unpredictably.
+#
+# No --options runtime (no hardened runtime) on either: MLX, faster-whisper
+# and PyObjC's native extensions were never built expecting library
+# validation or JIT-memory restrictions, and hardened runtime is what made
+# the old py2app stub need allow-jit/allow-unsigned-executable-memory
+# entitlements in the first place. Skipping it here avoids that class of
+# problem entirely, same as it already works when `make run` executes this
+# exact interpreter directly, unsigned-in-that-sense, from the checkout.
 IDENTITY="${CODESIGN_IDENTITY:-}"
 IDENTITY_LABEL="$IDENTITY"
 if [ -z "$IDENTITY" ]; then
@@ -101,27 +149,34 @@ fi
 : "${IDENTITY:=-}"
 : "${IDENTITY_LABEL:=$IDENTITY}"
 info "Signing as: $IDENTITY_LABEL"
-SIGNERR="$(mktemp -t aloud-codesign)"
-# No --deep. Apple deprecated it, and on an alias bundle it is actively wrong:
-# the bundle's Frameworks and MacOS entries are symlinks pointing at Homebrew's
-# Python and at this checkout, so --deep walks outside the bundle, tries to
-# re-sign files it does not own, and produces a signature that cannot be
-# verified afterwards -- which is worse than no signature, because TCC will
-# not hold a grant against one that does not verify. Signing the bundle itself
-# is what the Accessibility grant is keyed to.
-if codesign --force --options runtime \
-    --entitlements scripts/entitlements.plist \
-    --sign "$IDENTITY" "$BUILT" 2>"$SIGNERR"; then
-  rm -f "$SIGNERR"
-else
-  # Never a warning when a real identity was asked for. Continuing produced
-  # exactly the failure this whole mechanism exists to prevent: the build
-  # falls back to the ad-hoc signature the linker already applied, the code
-  # identity changes again, the Accessibility grant stops applying, and the
-  # only clue was one yellow line in a wall of green output.
-  printf '\n\033[1;31m==>\033[0m codesign failed. Its error:\n\n' >&2
-  sed 's/^/    /' "$SIGNERR" >&2
-  rm -f "$SIGNERR"
+
+sign_one() {
+  local what="$1" path="$2" err
+  err="$(mktemp -t aloud-codesign)"
+  if codesign --force --sign "$IDENTITY" "$path" 2>"$err"; then
+    rm -f "$err"
+    return 0
+  fi
+  printf '\n\033[1;31m==>\033[0m Signing %s failed. codesign said:\n\n' "$what" >&2
+  sed 's/^/    /' "$err" >&2
+  rm -f "$err"
+  return 1
+}
+
+# The copied interpreter first: it is a nested Mach-O binary that signing
+# the bundle below (no --deep) will not touch on its own, and it is the one
+# that matters -- the launcher execs it, replacing its own process image, so
+# whichever binary is actually running when Aloud calls CGEventTapCreate is
+# this one, not the launcher. Leaving it with Homebrew's original signature
+# would mean the Accessibility grant has to attach to *that* identity
+# instead, unpredictably.
+#
+# Then the bundle itself, which signs Contents/MacOS/Aloud (the main
+# executable) and seals the resource envelope -- Info.plist, the icon, and
+# the already-signed interpreter, hashed in as ordinary resource data -- in
+# one standard operation.
+if ! sign_one "the copied interpreter" "$BUILT/Contents/Resources/venv/bin/python" \
+   || ! sign_one "the bundle" "$BUILT"; then
   if [ "$IDENTITY" != "-" ]; then
     printf '\n    The identity "%s" is listed but codesign will not use it.\n' "$IDENTITY_LABEL" >&2
     printf '    Usually the certificate is not trusted for code signing yet:\n\n' >&2
@@ -133,26 +188,27 @@ else
   warn "Ad-hoc signing failed; continuing, but permissions will not stick."
 fi
 
-# --- 4. Verify -------------------------------------------------------------
-# Reported, not enforced. Refusing to install an unverifiable bundle sounded
-# right and was wrong in practice: an alias build cannot verify, and the gate
-# turned "an app with an imperfect signature" into "no app at all". The thing
-# that must not ship broken is an app that does not launch, and step 6 checks
-# exactly that.
+# --- 5. Verify ---------------------------------------------------------
+# Enforced, not just reported: unlike the old alias build, this one is
+# expected to actually pass, because nothing in it is a symlink pointing
+# outside the bundle. A failure here means something is genuinely wrong,
+# not an inherent limitation -- worth stopping for.
 info "Verifying the signature"
 if VERIFY_OUT=$(codesign --verify --strict --verbose=2 "$BUILT" 2>&1); then
   field "signature" "verifies"
 else
-  field "signature" "does not verify (expected for an alias build)"
-  printf '%s\n' "$VERIFY_OUT" | sed 's/^/        /'
-  printf '        Accessibility may need re-granting after a rebuild.\n'
+  printf '\n\033[1;31m==>\033[0m The signature does not verify:\n\n' >&2
+  printf '%s\n' "$VERIFY_OUT" | sed 's/^/    /' >&2
+  printf '\n    This build is not an alias build, so this is unexpected --\n' >&2
+  printf '    macOS will not hold an Accessibility grant against it either way,\n' >&2
+  printf '    so installing it would waste your time.\n' >&2
+  exit 1
 fi
 
 checkpoint() {
   # Verifies $2 and reports which step just ran, so a single install
   # pinpoints exactly where a signature stops verifying instead of leaving
-  # that to another round of guessing. Only $INSTALLED matters here -- that
-  # is what TCC checks -- but the label says which step to blame.
+  # that to another round of guessing.
   local label="$1" target="$2"
   if OUT=$(codesign --verify --strict --verbose=2 "$target" 2>&1); then
     field "  [$label]" "verifies"
@@ -162,7 +218,7 @@ checkpoint() {
   fi
 }
 
-# --- 5. Replace ------------------------------------------------------------
+# --- 6. Replace ------------------------------------------------------------
 # Only now, with a verified bundle in hand.
 if [ -e "$INSTALLED" ]; then
   if [ -e "$INSTALLED/Aloud.app" ]; then
@@ -172,26 +228,26 @@ if [ -e "$INSTALLED" ]; then
   rm -rf "$INSTALLED" || die "Could not remove $INSTALLED"
 fi
 
-info "Installing to $INSTALLED"
-# ditto preserves symlinks and metadata, and never nests on an existing target.
+info "Installing to $INSTALLED (this also takes a while — it's a full copy)"
+# ditto preserves metadata and never nests on an existing target.
 ditto "$BUILT" "$INSTALLED" || die "Could not copy the bundle into /Applications"
 checkpoint "after ditto" "$INSTALLED"
 
-# --- 6. Prove it works -----------------------------------------------------
+# --- 7. Prove it works -----------------------------------------------------
 info "Inspecting the installed bundle"
 PLIST="$INSTALLED/Contents/Info.plist"
 for key in CFBundleName CFBundleExecutable CFBundleIdentifier LSUIElement; do
   value=$(/usr/libexec/PlistBuddy -c "Print :$key" "$PLIST" 2>/dev/null || echo "(not set)")
   field "$key" "$value"
 done
-field "PyRuntimeLocations" "$(/usr/libexec/PlistBuddy -c 'Print :PyRuntimeLocations' "$PLIST" 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')"
 field "Contents/MacOS" "$(ls "$INSTALLED/Contents/MacOS" 2>/dev/null | tr '\n' ' ')"
 field "nested bundle?" "$([ -e "$INSTALLED/Aloud.app" ] && echo 'YES — still wrong' || echo 'no')"
+field "symlinks in bundle" "$(find "$INSTALLED" -type l 2>/dev/null | wc -l | tr -d ' ') (should be 0)"
 ICON=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST" 2>/dev/null || echo '')
 if [ -n "$ICON" ] && [ -e "$INSTALLED/Contents/Resources/${ICON%.icns}.icns" ]; then
   field "icon" "$ICON"
 else
-  field "icon" "MISSING — macOS will fall back to the Python framework's icon"
+  field "icon" "MISSING — macOS will fall back to a generic icon"
 fi
 
 # macOS caches app icons hard, and this bundle has been replaced many times.

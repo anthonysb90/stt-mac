@@ -265,23 +265,23 @@ def test_install_refuses_to_fall_back_to_ad_hoc_silently():
     """A named identity that fails to sign must stop the install.
 
     Continuing produced exactly the failure the mechanism exists to prevent:
-    the bundle keeps the linker's ad-hoc signature, the code identity changes
-    again, the Accessibility grant stops applying, and the only clue is one
+    the bundle keeps an ad-hoc signature, the code identity changes on every
+    rebuild, the Accessibility grant stops applying, and the only clue is one
     warning line in a wall of green output.
     """
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
     assert 'if [ "$IDENTITY" != "-" ]; then' in script
     assert "exit 1" in script
-    assert "codesign failed" in script, "and show codesign's own error"
-    assert '2>"$SIGNERR"' in script, "stderr must be captured, not /dev/null"
+    assert "codesign said" in script, "and show codesign's own error"
+    assert '2>"$err"' in script, "stderr must be captured, not /dev/null"
     # Comments explaining why --deep is gone are welcome; commands are not.
     commands = [
         line for line in script.splitlines() if not line.lstrip().startswith("#")
     ]
     assert not any("--deep" in line for line in commands), (
-        "--deep walks an alias bundle's symlinks out to Homebrew and this "
-        "checkout, producing a signature that cannot verify -- and TCC will "
-        "not hold a grant against one that does not verify"
+        "--deep tries to re-sign nested code it does not own and produces a "
+        "signature that cannot verify -- and TCC will not hold a grant "
+        "against one that does not verify"
     )
     assert "--verify --strict" in script, "verify before installing, not after"
 
@@ -353,7 +353,7 @@ def test_install_never_removes_the_app_before_it_has_a_replacement():
     correctly refused a bad bundle also uninstalled the working one."""
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
     removal = script.index('rm -rf "$INSTALLED"')
-    for gate in ("info \"Building\"", "Verifying the signature", "codesign --force"):
+    for gate in ('info "Assembling the bundle"', "Verifying the signature", "sign_one"):
         assert script.index(gate) < removal, (
             f"{gate!r} must run before the installed app is removed"
         )
@@ -367,26 +367,35 @@ def test_install_reports_a_missing_icon():
     assert "killall Dock" in script, "and bust the icon cache after replacing"
 
 
-def test_install_leaves_outward_links_alone_by_default():
-    """An alias build is made of links leaving the bundle. codesign will not
-    seal them, but every attempt to satisfy it broke the app: copying
-    Contents/MacOS/python loses the stdlib ("no module named encodings"),
-    deleting it segfaults py2app_main. A bundle that runs beats one that
-    verifies, so copying is opt-in behind ALOUD_FLATTEN."""
+def test_install_builds_no_symlinks_at_all():
+    """The py2app alias build's whole problem was symlinks leaving the
+    bundle -- codesign refuses to seal them, and neither copying nor
+    deleting the specific offenders (Contents/MacOS/python,
+    Contents/Frameworks/Python.framework) left a working app. The
+    hand-assembled bundle sidesteps this instead of fighting it: the venv is
+    copied with `cp -RL`, which dereferences every symlink it walks, so
+    there is nothing left for codesign to object to."""
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
-    tidy = script.index("flatten_bundle.py")
-    assert tidy < script.index("codesign --force"), "tidy, then sign"
-    assert tidy < script.index('rm -rf "$INSTALLED"'), "and before uninstalling"
-    assert "ALOUD_FLATTEN" in script, "copying outward links must be opt-in"
+    assert "cp -RL .venv" in script, "-L dereferences symlinks during the copy"
+    assert "flatten_bundle.py" not in script, (
+        "no bundle-internal symlinks are created in the first place, so "
+        "there is nothing left to flatten"
+    )
+    # The install's own diagnostic asserts this on the real, installed
+    # bundle; this asserts the intent is written down, not just hoped for.
+    assert 'find "$INSTALLED" -type l' in script
 
 
-def test_a_failed_verification_does_not_block_the_install():
-    """The gate turned "an imperfect signature" into "no app at all"."""
+def test_a_failed_verification_blocks_the_install():
+    """Unlike the alias build, this bundle is expected to actually verify --
+    there is nothing left inside it pointing outside the bundle. A failure
+    here means something is genuinely wrong, and installing it would only
+    buy another round of an Accessibility grant that cannot hold."""
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
     verify = script.index("Verifying the signature")
-    tail = script[verify:script.index("--- 5. Replace")]
-    assert "exit 1" not in tail, "report the signature, do not refuse to install"
-    assert "does not verify (expected" in tail
+    tail = script[verify:script.index("--- 6. Replace")]
+    assert "exit 1" in tail, "a bundle that fails to verify must not be installed"
+    assert "unexpected" in tail
 
 
 def test_install_checkpoints_the_signature_after_every_stage():
@@ -402,3 +411,109 @@ def test_install_checkpoints_the_signature_after_every_stage():
     ditto_call = script.index('ditto "$BUILT" "$INSTALLED"')
     launch_call = script.index('"$INSTALLED/Contents/MacOS/Aloud" --version')
     assert ditto_call < after_ditto < after_touch < launch_call < after_launch
+
+
+# -- the hand-assembled bundle: write_plist.py and launcher.c ---------------
+
+
+def test_write_plist_produces_valid_bundle_metadata(tmp_path):
+    """Runnable on Linux -- it is pure plistlib, no macOS dependency -- so
+    this is real coverage, not just a string check on a shell script."""
+    import subprocess
+    import sys
+
+    script = SRC.parent.parent / "scripts" / "write_plist.py"
+    out = tmp_path / "Info.plist"
+    result = subprocess.run(
+        [sys.executable, str(script), str(out)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert out.exists()
+
+    import plistlib
+
+    with out.open("rb") as handle:
+        plist = plistlib.load(handle)
+    assert plist["CFBundleExecutable"] == "Aloud"
+    assert plist["CFBundleIconFile"] == "Aloud.icns"
+    assert plist["CFBundleIdentifier"] == "com.aloud.Aloud"
+    assert plist["LSEnvironment"] == {"PYTHONUTF8": "1"}
+
+
+def test_write_plist_drops_nsprincipalclass():
+    """NSPrincipalClass tells NSApplicationMain which class to instantiate.
+
+    The bundle's executable is a trampoline that execs straight into Python
+    -- it never calls NSApplicationMain, so the key would be inert at best
+    and misleading at worst (implying a C-level Cocoa bootstrap that does
+    not happen)."""
+    script = (SRC.parent.parent / "scripts" / "write_plist.py").read_text()
+    assert "NSPrincipalClass" in script  # named, to explain why it's dropped
+    assert 'plist.pop("NSPrincipalClass"' in script
+
+
+def test_write_plist_reads_setup_py_as_the_single_source_of_truth():
+    """Two build paths (this one and the legacy py2app one) must not carry
+    two independently-maintained copies of the same bundle metadata."""
+    script = (SRC.parent.parent / "scripts" / "write_plist.py").read_text()
+    assert "setup.py" in script
+    assert "module.PLIST" in script
+
+
+def test_launcher_forwards_argv_to_python_dash_m_aloud():
+    """`make tap-test`/`--version`/`doctor` all invoke the installed binary
+    with arguments; the trampoline has to pass them through unchanged."""
+    source = (SRC.parent.parent / "scripts" / "launcher.c").read_text()
+    assert '"-m"' in source and '"aloud"' in source
+    assert "execv(" in source
+    assert "_NSGetExecutablePath" in source, "must locate itself, not assume a fixed path"
+
+
+def test_launcher_execs_the_bundled_copy_not_an_external_interpreter():
+    """Exec-ing an external interpreter (Homebrew, or the checkout's venv
+    directly) would leave the running process with no bundle association at
+    all -- the same reason a bare `python -m aloud run` shows a generic
+    icon instead of Aloud's. The target must be inside the bundle."""
+    source = (SRC.parent.parent / "scripts" / "launcher.c").read_text()
+    assert "Resources/venv/bin/python" in source
+    assert "/opt/homebrew" not in source, "no hardcoded external path"
+    assert "getenv" not in source or "REPO_ROOT" not in source
+
+
+def test_install_compiles_the_launcher_and_copies_the_venv():
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    assert "clang" in script
+    assert "launcher.c" in script
+    assert 'command -v clang' in script, "fail with a clear message, not a cryptic one"
+    copy = script.index("cp -RL .venv")
+    compile_step = script.index("clang -O2")
+    sign = script.index("sign_one")
+    assert compile_step < sign and copy < sign, "build everything before signing it"
+
+
+def test_install_signs_the_copied_interpreter_not_just_the_launcher():
+    """TCC evaluates whichever binary is actually running when Aloud calls
+    CGEventTapCreate. The launcher execs the copied interpreter, replacing
+    its own process image -- so that interpreter, not the launcher, is what
+    the Accessibility grant has to attach to."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    interpreter_sign = script.index('sign_one "the copied interpreter"')
+    bundle_sign = script.index('sign_one "the bundle"')
+    assert interpreter_sign < bundle_sign, (
+        "the nested binary must be signed before the outer bundle seal, "
+        "which does not touch nested code without --deep"
+    )
+
+
+def test_install_skips_hardened_runtime():
+    """MLX, faster-whisper and PyObjC's native extensions were never built
+    expecting library validation or JIT-memory restrictions -- hardened
+    runtime is what made the old py2app stub need allow-jit and
+    allow-unsigned-executable-memory entitlements in the first place.
+    Skipping it here avoids that whole class of problem."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    commands = [
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    ]
+    assert not any("--options runtime" in line for line in commands)
+    assert not any("entitlements.plist" in line for line in commands)
