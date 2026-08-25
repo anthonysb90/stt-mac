@@ -42,6 +42,29 @@ rm -rf build dist
 }
 [ -d "$BUILT" ] || die "py2app did not produce $BUILT"
 
+# --- 2b. Prune broken symlinks --------------------------------------------
+# An alias build links out to Homebrew's Python framework and to this checkout.
+# When one of those links dangles, `codesign --verify` reports it as the whole
+# bundle being missing -- "dist/Aloud.app: No such file or directory" -- which
+# sends you looking for a bundle that is plainly right there. A dangling link
+# points at nothing by definition, so removing it costs the app nothing and is
+# the difference between a signature that verifies and one that cannot.
+info "Checking for broken symlinks"
+BROKEN=0
+while IFS= read -r link; do
+  [ -e "$link" ] && continue
+  warn "broken: ${link#"$BUILT"/} -> $(readlink "$link")"
+  rm -f "$link"
+  BROKEN=$((BROKEN + 1))
+done <<EOF
+$(find "$BUILT" -type l 2>/dev/null)
+EOF
+if [ "$BROKEN" -gt 0 ]; then
+  info "Removed $BROKEN broken symlink(s) before signing."
+else
+  info "None."
+fi
+
 # --- 3. Sign ---------------------------------------------------------------
 # Prefer a stable identity over ad-hoc. Ad-hoc signing derives the app's code
 # identity from a hash of its contents, so every rebuild is a different app to

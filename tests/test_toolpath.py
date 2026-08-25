@@ -309,3 +309,19 @@ def test_signing_resolves_the_identity_to_a_hash():
     cert = (SRC.parent.parent / "scripts" / "make_signing_cert.sh").read_text()
     assert "identity_hashes()" in cert
     assert "forget_duplicates()" in cert, "and clear duplicates rather than pick"
+
+
+def test_install_prunes_broken_symlinks_before_signing():
+    """A dangling link makes codesign report the whole bundle as missing:
+
+        dist/Aloud.app: No such file or directory
+
+    which sends you looking for a bundle that is plainly there. An alias build
+    links out to Homebrew's Python and to the checkout, so dangling links are
+    normal; they point at nothing, so removing them costs the app nothing.
+    """
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    prune = script.index("Checking for broken symlinks")
+    sign = script.index("--- 3. Sign")
+    assert prune < sign, "pruning has to happen before signing, not after"
+    assert "find \"$BUILT\" -type l" in script
