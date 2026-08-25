@@ -180,6 +180,12 @@ class HotkeyListener:
         keycode = Quartz.CGEventGetIntegerValueField(
             event, Quartz.kCGKeyboardEventKeycode
         )
+        # Silent below INFO in normal use, but the one question a dead
+        # hotkey can't otherwise answer: did the tap see anything at all
+        # while some other app had focus? "Nothing logged" and "logged, but
+        # the keycode wasn't the one we're waiting for" look identical from
+        # outside the process.
+        log.debug("tap saw flagsChanged: keycode=%s (want %s)", keycode, self._keycode)
         if keycode != self._keycode:
             return event
 
