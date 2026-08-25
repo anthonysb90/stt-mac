@@ -171,15 +171,25 @@ class AloudDelegate(Foundation.NSObject):
         self.controller.transcribe_file(path)
 
     @objc.python_method
+    def on_job_preparing(self, job) -> None:
+        window = self._import_window
+        if job.source != "file" or window is None:
+            return
+        run_on_main(lambda: window.begin("Converting with ffmpeg…"))
+
+    @objc.python_method
     def on_job_started(self, job) -> None:
-        if job.source != "file" or self._import_window is None:
+        # Snapshot: the deferred block must not re-read self._import_window,
+        # which another callback can null out before the main queue gets here.
+        window = self._import_window
+        if job.source != "file" or window is None:
             return
         streaming = getattr(self.controller.engine, "supports_progress", False)
         detail = "Transcribing…" if streaming else (
             f"Transcribing with {self.controller.engine.label} — "
             f"this engine reports no progress until it finishes."
         )
-        run_on_main(lambda: self._import_window.begin(detail))
+        run_on_main(lambda: window.begin(detail))
 
     @objc.python_method
     def on_progress(self, job, text, done, total) -> None:

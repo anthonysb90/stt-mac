@@ -530,3 +530,49 @@ def test_parakeet_reports_the_download_error_not_the_cache_miss(hub):
     message = str(caught.value)
     assert "Could not reach Hugging Face" in message
     assert "not in the cache" not in message
+
+
+# -- a failed load must not be a permanent one -------------------------------
+
+
+def test_parakeet_retries_after_a_transient_failure(hub, tmp_path, monkeypatch):
+    """One launch with no network used to brick the engine until restart."""
+    monkeypatch.setattr(pk_module, "supported", lambda: True)
+    monkeypatch.setattr(pk_module.importlib.util, "find_spec", lambda _n: object())
+    from aloud import media
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: "/opt/homebrew/bin/ffmpeg")
+
+    engine = pk_module.ParakeetMLXEngine()
+    engine._load_error = "Could not reach Hugging Face earlier"
+
+    # The stale error must not pre-empt a fresh attempt...
+    hub(_CacheAwareHub(cached=str(tmp_path)))
+    import sys, types
+
+    fake = types.ModuleType("parakeet_mlx")
+    fake.from_pretrained = lambda source: object()
+    monkeypatch.setitem(sys.modules, "parakeet_mlx", fake)
+
+    assert engine._load() is not None
+    assert engine._load_error == ""
+
+    # ...while check() still reports it honestly *between* attempts.
+    engine2 = pk_module.ParakeetMLXEngine()
+    engine2._load_error = "old failure"
+    ok, detail = engine2.check()
+    assert not ok and "old failure" in detail
+
+
+def test_faster_whisper_clears_its_error_on_retry_too():
+    import ast
+    from pathlib import Path
+
+    source = Path(fw_module.__file__).with_suffix(".py").read_text()
+    load = next(
+        node for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "_load"
+    )
+    assert "self._load_error = ''" in ast.unparse(load), (
+        "a stale _load_error makes check() refuse forever; clear it per attempt"
+    )

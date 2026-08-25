@@ -163,3 +163,65 @@ def test_duration_is_zero_rather_than_an_error_when_unknown(tmp_path, monkeypatc
     source = tmp_path / "voice.m4a"
     source.write_bytes(b"x")
     assert media.duration_of(source) == 0.0
+
+
+# -- WAVs that only look ready ----------------------------------------------
+
+
+def _wav(path, rate=16000, channels=1, width=2, seconds=0.2):
+    import wave
+
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(channels)
+        handle.setsampwidth(width)
+        handle.setframerate(rate)
+        handle.writeframes(b"\x00" * int(rate * seconds) * channels * width)
+    return path
+
+
+def test_a_target_format_wav_passes_straight_through(tmp_path):
+    wav = _wav(tmp_path / "ready.wav")
+    prepared = media.prepare(wav)
+    assert prepared.path == wav
+    assert not prepared.converted
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"rate": 44100},           # the most common WAV there is
+        {"channels": 2},           # stereo
+        {"width": 3},              # 24-bit
+    ],
+    ids=["44.1kHz", "stereo", "24-bit"],
+)
+def test_a_mismatched_wav_is_converted_not_trusted(tmp_path, monkeypatch, kwargs):
+    """The suffix used to be the whole check; the header is what matters."""
+    wav = _wav(tmp_path / "export.wav", **kwargs)
+    converted = {}
+
+    def fake_run(command, **_kw):
+        target = Path(command[-1])
+        _wav(target)
+        converted["ran"] = True
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    prepared = media.prepare(wav)
+    assert converted.get("ran"), "ffmpeg must be asked to resample"
+    assert prepared.converted and prepared.temporary
+    prepared.cleanup()
+
+
+def test_a_wav_that_is_not_really_a_wav_is_converted(tmp_path, monkeypatch):
+    fake = tmp_path / "lies.wav"
+    fake.write_bytes(b"ID3\x04actually an mp3")
+
+    def fake_run(command, **_kw):
+        _wav(Path(command[-1]))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    assert media.prepare(fake).converted

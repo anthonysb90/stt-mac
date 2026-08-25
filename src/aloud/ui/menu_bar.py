@@ -17,10 +17,10 @@ import AppKit
 import Foundation
 
 from .. import APP_NAME
-from .. import audio
 from ..core import State
 from ..hotkey import describe
 from . import components as C
+from . import devices
 from . import dock
 from . import tokens as T
 
@@ -120,26 +120,7 @@ class MenuBarItem:
 
     def _build_microphone_menu(self, menu) -> None:
         """Rebuilt on every open, so a mic plugged in a moment ago is there."""
-        menu.removeAllItems()
-        current = self.controller.input_device()
-
-        menu.addItem_(C.menu_item(
-            audio.describe_device(None), lambda: self.controller.set_input_device(None),
-            self._keeper, checked=current is None,
-        ))
-        devices = audio.list_input_devices()
-        if devices:
-            menu.addItem_(AppKit.NSMenuItem.separatorItem())
-        for device in devices:
-            index = device["index"]
-            menu.addItem_(C.menu_item(
-                device["name"],
-                lambda i=index: self.controller.set_input_device(i),
-                self._keeper,
-                checked=(current == index or current == device["name"]),
-            ))
-        if not devices:
-            menu.addItem_(C.menu_item("No microphones found", None, self._keeper, enabled=False))
+        devices.populate_menu(menu, self.controller, self._keeper)
 
     def _rebuild(self) -> None:
         self.menu.removeAllItems()

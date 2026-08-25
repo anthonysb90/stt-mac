@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import wave
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -86,13 +87,35 @@ def is_supported(path: Path) -> bool:
     return path.suffix.lower().lstrip(".") in AUDIO_EXTENSIONS
 
 
+def _wav_matches_target(path: Path) -> bool:
+    """Whether a WAV file is already 16 kHz mono 16-bit.
+
+    The extension used to be trusted on its own, which let a 44.1 kHz stereo
+    export -- the most common kind of WAV there is -- straight through to
+    engines that assume 16 kHz mono: whisper.cpp rejects it, and Parakeet's
+    streaming reader would feed 44.1k samples to a decoder timed for 16k,
+    transcribing time-distorted audio into nonsense. Anything that is not
+    exactly the target format (or that cannot be parsed at all -- WAVE_FORMAT_
+    EXTENSIBLE, float PCM) goes through ffmpeg like every other format.
+    """
+    try:
+        with wave.open(str(path), "rb") as handle:
+            return (
+                handle.getframerate() == TARGET_SAMPLE_RATE
+                and handle.getnchannels() == TARGET_CHANNELS
+                and handle.getsampwidth() == 2
+            )
+    except (OSError, wave.Error, EOFError):
+        return False
+
+
 def prepare(path: Path) -> Prepared:
     """Normalise ``path`` to 16 kHz mono WAV, if we can and if it is needed."""
     path = Path(path).expanduser()
     if not path.is_file():
         raise MediaError(f"No such file: {path}")
 
-    if path.suffix.lower() == ".wav":
+    if path.suffix.lower() == ".wav" and _wav_matches_target(path):
         return Prepared(path=path, temporary=False, converted=False, original=path)
 
     ffmpeg = ffmpeg_path()

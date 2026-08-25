@@ -410,6 +410,7 @@ def test_a_microphone_recording_is_still_deleted_after_use(app, tmp_path):
 
 
 def test_an_unreadable_file_reports_instead_of_crashing(app, tmp_path, monkeypatch):
+    """Conversion now happens on the worker, so its failure surfaces there."""
     from aloud.media import MediaError
 
     def explode(_path):
@@ -419,6 +420,85 @@ def test_an_unreadable_file_reports_instead_of_crashing(app, tmp_path, monkeypat
     watcher = Recorder()
     app.add_observer(watcher)
 
-    app.transcribe_file(tmp_path / "broken.mp3")
-    assert app._jobs.qsize() == 0
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not audio")
+    app.transcribe_file(broken)
+    assert app._jobs.qsize() == 1, "queued; the conversion has not run yet"
+    app._drain_one_for_test(app._jobs.get())
     assert watcher.errors and "Invalid data" in watcher.errors[0][1]
+
+
+def test_a_missing_file_is_refused_before_queueing(app, tmp_path):
+    watcher = Recorder()
+    app.add_observer(watcher)
+    app.transcribe_file(tmp_path / "nowhere.mp3")
+    assert app._jobs.qsize() == 0
+    assert watcher.errors and "No such file" in watcher.errors[0][1]
+
+
+# -- the states that used to leave the microphone hot -----------------------
+
+
+def test_error_recovery_does_not_clobber_a_new_recording(app):
+    """The 3s ERROR->IDLE timer must stand down if dictation resumed.
+
+    It used to set IDLE unconditionally. Press the hotkey inside the window
+    and the timer fired over RECORDING; releasing then found the wrong state
+    and never stopped the recorder — a hot microphone until quit.
+    """
+    app._fail("boom", "it broke")
+    assert app.state is State.ERROR
+
+    app.begin_recording()
+    assert app.state is State.RECORDING
+
+    app._recover_from_error()  # the timer firing, without the 3s wait
+    assert app.state is State.RECORDING, "recovery must only clear ERROR"
+
+    app.finish_recording()
+    assert not app.recorder.recording, "the recorder must actually stop"
+    assert app._jobs.qsize() == 1
+
+
+def test_error_recovery_still_clears_a_stale_error(app):
+    app._fail("boom", "it broke")
+    app._recover_from_error()
+    assert app.state is State.IDLE
+
+
+def test_importing_a_file_while_recording_is_refused_without_breaking_it(app, tmp_path):
+    """The refusal must not change state: ERROR would orphan the recorder too."""
+    audio = _silent_wav(tmp_path / "clip.wav")
+    watcher = Recorder()
+    app.add_observer(watcher)
+
+    app.begin_recording()
+    app.transcribe_file(audio)
+
+    assert app.state is State.RECORDING, "the dictation in progress survives"
+    assert app._jobs.qsize() == 0, "the file was not queued"
+    assert watcher.errors and "recording" in watcher.errors[0][1]
+
+    app.finish_recording()
+    assert not app.recorder.recording
+    assert app._jobs.qsize() == 1, "the dictation still went through"
+
+
+def test_file_conversion_runs_on_the_worker_not_the_caller(app, tmp_path, monkeypatch):
+    """transcribe_file() is called from the main thread; ffmpeg is not quick."""
+    calls = []
+
+    def fake_prepare(path):
+        calls.append(path)
+        from aloud.media import Prepared
+        wav = _silent_wav(tmp_path / "prepared.wav")
+        return Prepared(path=wav, temporary=False, converted=True, original=path)
+
+    monkeypatch.setattr("aloud.media.prepare", fake_prepare)
+    source = tmp_path / "talk.mp3"
+    source.write_bytes(b"fake")
+
+    app.transcribe_file(source)
+    assert calls == [], "queueing must not convert"
+    app._drain_one_for_test(app._jobs.get())
+    assert calls == [source], "the worker converts"

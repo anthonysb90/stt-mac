@@ -131,16 +131,19 @@ class WhisperCppEngine(TranscriptionEngine):
         command = self._build_command(wav_path, bias_terms)
         log.debug("Running: %s", " ".join(command))
         started = time.monotonic()
+        timeout = self._timeout_for(wav_path)
         try:
             completed = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
-                timeout=self.options.get("timeout", 120),
+                timeout=timeout,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise EngineError("whisper.cpp timed out") from exc
+            raise EngineError(
+                f"whisper.cpp took longer than {timeout:.0f}s and was stopped"
+            ) from exc
         except OSError as exc:
             raise EngineError(f"Could not run {self.binary}: {exc}") from exc
 
@@ -158,6 +161,27 @@ class WhisperCppEngine(TranscriptionEngine):
         )
 
     # -- internals ---------------------------------------------------------
+
+    def _timeout_for(self, wav_path: Path) -> float:
+        """A ceiling scaled to the audio, not a flat 120 seconds.
+
+        The flat value was tuned for dictation and killed legitimate long
+        imports: an hour of audio on CPU takes far more than two minutes while
+        making steady progress. Allow generous multiples of real time -- this
+        exists to catch a hang, not to police slowness -- and keep a floor so
+        a three-second dictation is not timed out by model-load overhead.
+        An explicit config value still wins.
+        """
+        configured = self.options.get("timeout")
+        if configured:
+            return float(configured)
+        try:
+            from ..audio import wav_duration
+
+            seconds = wav_duration(wav_path)
+        except Exception:
+            seconds = 0.0
+        return max(120.0, seconds * 4.0)
 
     def _build_command(self, wav_path: Path, bias_terms: Sequence[str] = ()) -> List[str]:
         assert self.binary is not None and self.model is not None

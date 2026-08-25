@@ -18,6 +18,7 @@ import time
 from typing import Optional
 
 import AppKit
+import Foundation
 import Quartz
 
 log = logging.getLogger(__name__)
@@ -45,6 +46,59 @@ def write_clipboard(text: str) -> None:
     pasteboard = AppKit.NSPasteboard.generalPasteboard()
     pasteboard.clearContents()
     pasteboard.setString_forType_(text, AppKit.NSPasteboardTypeString)
+
+
+#: A full pasteboard snapshot: one list of (type, bytes) per pasteboard item.
+Snapshot = list
+
+
+def snapshot_clipboard() -> Optional[Snapshot]:
+    """Everything on the pasteboard, whatever its type.
+
+    Reading only the string, as this used to, meant a copied screenshot or a
+    Finder file was destroyed by dictating: the string read came back None, so
+    nothing was restored, despite ``restore_clipboard=True`` promising exactly
+    that. Items are captured with all of their representations so an image, a
+    file reference, or rich text survives the round trip.
+
+    Returns None for an empty pasteboard, and an empty snapshot ([]) when the
+    pasteboard has items that cannot be read -- the caller treats both as
+    "nothing to restore", which is the safe direction: better to skip a
+    restore than to write back a corrupted one.
+    """
+    pasteboard = AppKit.NSPasteboard.generalPasteboard()
+    try:
+        items = pasteboard.pasteboardItems()
+        if not items:
+            return None
+        captured: Snapshot = []
+        for item in items:
+            representations = []
+            for kind in item.types():
+                data = item.dataForType_(kind)
+                if data is not None:
+                    representations.append((str(kind), bytes(data)))
+            if representations:
+                captured.append(representations)
+        return captured or None
+    except Exception:
+        log.exception("Could not snapshot the pasteboard; skipping restore")
+        return None
+
+
+def restore_clipboard(snapshot: Snapshot) -> None:
+    """Put a snapshot back, rebuilding each item with its original types."""
+    pasteboard = AppKit.NSPasteboard.generalPasteboard()
+    rebuilt = []
+    for representations in snapshot:
+        item = AppKit.NSPasteboardItem.alloc().init()
+        for kind, payload in representations:
+            item.setData_forType_(
+                Foundation.NSData.dataWithBytes_length_(payload, len(payload)), kind
+            )
+        rebuilt.append(item)
+    pasteboard.clearContents()
+    pasteboard.writeObjects_(rebuilt)
 
 
 # -- key synthesis ---------------------------------------------------------
@@ -108,7 +162,7 @@ class TextInjector:
         if self.mode != "paste":
             raise InjectionError(f"Unknown output mode {self.mode!r}")
 
-        previous = read_clipboard() if self.restore_clipboard else None
+        previous = snapshot_clipboard() if self.restore_clipboard else None
         write_clipboard(payload)
         # A beat for the pasteboard write to land before the target app reads it.
         time.sleep(0.03)
@@ -117,14 +171,14 @@ class TextInjector:
         if previous is not None:
             self._restore_later(previous, payload)
 
-    def _restore_later(self, previous: str, payload: str) -> None:
+    def _restore_later(self, previous: Snapshot, payload: str) -> None:
         """Put the old clipboard back, but only if we still own the pasteboard."""
 
         def restore() -> None:
             time.sleep(self.restore_delay)
             try:
                 if read_clipboard() == payload:
-                    write_clipboard(previous)
+                    restore_clipboard(previous)
             except Exception:
                 log.exception("Failed to restore the clipboard")
 

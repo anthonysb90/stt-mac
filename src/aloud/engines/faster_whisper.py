@@ -117,6 +117,12 @@ class FasterWhisperEngine(TranscriptionEngine):
             if self._model is not None:
                 return self._model
 
+            # A previous failure is a report, not a verdict. Left in place it
+            # made check() refuse forever: one launch with no network bricked
+            # the engine until the app was restarted, even after the network
+            # came back. Each attempt starts clean and re-diagnoses.
+            self._load_error = ""
+
             ok, detail = self.check()
             if not ok:
                 raise EngineError(detail)

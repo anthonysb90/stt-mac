@@ -90,21 +90,59 @@ def _make_quartz() -> types.ModuleType:
 # -- AppKit / Foundation ---------------------------------------------------
 
 
+class _FakePasteboardItem:
+    """One pasteboard item: a dict of type -> bytes, like the real thing."""
+
+    @classmethod
+    def alloc(cls) -> type:
+        return cls
+
+    @classmethod
+    def init(cls) -> "_FakePasteboardItem":
+        return cls({})
+
+    def __init__(self, data: Optional[Dict[str, bytes]] = None) -> None:
+        self._data: Dict[str, bytes] = dict(data or {})
+
+    def types(self) -> List[str]:
+        return list(self._data)
+
+    def dataForType_(self, kind: str) -> Optional[bytes]:
+        return self._data.get(kind)
+
+    def setData_forType_(self, data: bytes, kind: str) -> None:
+        self._data[kind] = bytes(data)
+
+
 class _FakePasteboard:
-    _contents: Optional[str] = None
+    """Item-based, like NSPasteboard: a string is one item with a string type."""
+
+    STRING_TYPE = "public.utf8-plain-text"
+    _items: List[_FakePasteboardItem] = []
 
     @classmethod
     def generalPasteboard(cls) -> "_FakePasteboard":
         return cls()
 
     def clearContents(self) -> None:
-        type(self)._contents = None
+        type(self)._items = []
 
-    def setString_forType_(self, value: str, _type: str) -> None:
-        type(self)._contents = value
+    def setString_forType_(self, value: str, kind: str) -> None:
+        type(self)._items = [_FakePasteboardItem({kind: value.encode("utf-8")})]
 
-    def stringForType_(self, _type: str) -> Optional[str]:
-        return type(self)._contents
+    def stringForType_(self, kind: str) -> Optional[str]:
+        for item in type(self)._items:
+            data = item.dataForType_(kind)
+            if data is not None:
+                return data.decode("utf-8")
+        return None
+
+    def pasteboardItems(self) -> List[_FakePasteboardItem]:
+        return list(type(self)._items)
+
+    def writeObjects_(self, items: List[_FakePasteboardItem]) -> bool:
+        type(self)._items = list(items)
+        return True
 
 
 class _FakeSound:
@@ -156,6 +194,7 @@ def _make_appkit() -> types.ModuleType:
     return _module(
         "AppKit",
         NSPasteboard=_FakePasteboard,
+        NSPasteboardItem=_FakePasteboardItem,
         NSPasteboardTypeString="public.utf8-plain-text",
         NSSound=_FakeSound,
         NSApplication=_FakeApplication,
@@ -181,6 +220,9 @@ def _make_foundation() -> types.ModuleType:
     return _module(
         "Foundation",
         NSOperationQueue=_InlineQueue,
+        NSData=types.SimpleNamespace(
+            dataWithBytes_length_=lambda payload, _length: bytes(payload)
+        ),
         NSDictionary=types.SimpleNamespace(
             dictionaryWithObject_forKey_=lambda value, key: {key: value}
         ),

@@ -19,12 +19,13 @@ import AppKit
 import Foundation
 import objc
 
-from .. import APP_NAME, audio, media
+from .. import APP_NAME, media
 from ..core import State
 from ..hotkey import describe
 from . import components as C
 from . import tokens as T
 from .dictionary_view import DictionaryView
+from . import devices
 from .history_view import HistoryView
 from .transcribe_view import TranscribeView
 from .formatting import db_label, shorten as media_label
@@ -117,27 +118,10 @@ class MainWindow:
         )
 
     def _build_device_menu(self, menu) -> None:
-        menu.removeAllItems()
-        current = self.controller.input_device()
-        menu.addItem_(C.menu_item(
-            media_label(audio.describe_device(None)),
-            lambda: self.controller.set_input_device(None),
-            self._keeper, checked=current is None,
-        ))
-        devices = audio.list_input_devices()
-        if devices:
-            menu.addItem_(AppKit.NSMenuItem.separatorItem())
-        for device in devices:
-            index = device["index"]
-            menu.addItem_(C.menu_item(
-                device["name"],
-                lambda i=index: self.controller.set_input_device(i),
-                self._keeper,
-                checked=(current == index or current == device["name"]),
-            ))
-        if not devices:
-            menu.addItem_(C.menu_item("No microphones found", None, self._keeper, enabled=False))
-        self._select_current_device(menu, current)
+        devices.populate_menu(
+            menu, self.controller, self._keeper, describe_default=media_label
+        )
+        self._select_current_device(menu, self.controller.input_device())
 
     def _select_current_device(self, menu, current) -> None:
         popup = getattr(self, "device_popup", None)

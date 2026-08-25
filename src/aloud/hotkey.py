@@ -36,6 +36,26 @@ MODIFIER_KEYS: dict[str, Tuple[int, int]] = {
     "right_command": (54, Quartz.kCGEventFlagMaskCommand),
 }
 
+#: name -> device-specific flag bit, from IOKit's IOLLEvent.h (NX_DEVICE*KEYMASK).
+#:
+#: The masks above answer "is *any* Option down", which is the wrong question
+#: for a one-sided hotkey: hold right Option to dictate, press left Option too,
+#: and releasing the right one leaves the shared bit set -- so the release was
+#: never seen and the recording ran on. These low bits are per physical key.
+#: macOS has set them on flags-changed events since the NeXT days; they are not
+#: in the public CGEventFlags enum, which is why the values are spelled out.
+#: The Fn key has no sided variant and keeps the public mask.
+DEVICE_KEY_MASKS: dict[str, int] = {
+    "left_control": 0x00000001,
+    "left_shift": 0x00000002,
+    "right_shift": 0x00000004,
+    "left_command": 0x00000008,
+    "right_command": 0x00000010,
+    "left_option": 0x00000020,
+    "right_option": 0x00000040,
+    "right_control": 0x00002000,
+}
+
 _TAP_DISABLED_EVENTS = (
     Quartz.kCGEventTapDisabledByTimeout,
     Quartz.kCGEventTapDisabledByUserInput,
@@ -76,7 +96,10 @@ class HotkeyListener:
             )
         self.key = key
         self.mode = mode
-        self._keycode, self._mask = MODIFIER_KEYS[key]
+        self._keycode, mask = MODIFIER_KEYS[key]
+        # The device-specific bit where one exists: it tracks this physical
+        # key alone, so the other side's state cannot mask an edge.
+        self._mask = DEVICE_KEY_MASKS.get(key, mask)
         self._on_press = on_press
         self._on_release = on_release
         self._tap = None

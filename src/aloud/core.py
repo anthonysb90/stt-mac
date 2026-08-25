@@ -68,6 +68,10 @@ class Job:
     deliver: bool = True
     source: str = "microphone"
     label: str = ""
+    #: Convert to 16 kHz mono WAV on the worker before transcribing. Set for
+    #: imported files, which arrive in whatever format they arrive in; a
+    #: dictation is already recorded in the target format.
+    prepare: bool = False
     cleanup: Optional[Any] = None
 
 
@@ -320,9 +324,22 @@ class DictationController:
         self._cancel_current.set()
 
     def _transcribe_and_deliver(self, job: Job) -> None:
+        self._cancel_current.clear()
+
+        if job.prepare:
+            # Emitted first so the progress window exists while ffmpeg runs;
+            # "Reading the file…" is honest about what this stage is.
+            self._emit("on_job_preparing", job)
+            prepared = media.prepare(job.audio)  # MediaError -> _run_job's catch
+            job.audio = prepared.path
+            job.cleanup = prepared.cleanup
+            log.info(
+                "Importing %s (%s)", job.label,
+                "converted to 16 kHz mono" if prepared.converted else "used as-is",
+            )
+
         wav_path = job.audio
         started = time.monotonic()
-        self._cancel_current.clear()
         self._emit("on_job_started", job)
 
         # Only files stream. A dictation is a few seconds long, and reporting
@@ -395,29 +412,42 @@ class DictationController:
     def transcribe_file(self, path: Path) -> None:
         """Queue an audio or video file for transcription.
 
-        Converted to 16 kHz mono WAV first where ffmpeg allows, so the rest of
-        the pipeline is identical to a dictation. The result is *not* typed
-        anywhere — it goes to the history and to whoever is listening.
+        Converted to 16 kHz mono WAV where ffmpeg allows -- on the worker, not
+        here. This is called from the main thread, and ffmpeg on a long video
+        can run for minutes; doing that here froze every window and starved
+        the event tap. Here we only check the file exists, which is cheap and
+        catches the common mistake immediately.
+
+        The result is *not* typed anywhere — it goes to the history and to
+        whoever is listening.
         """
-        path = Path(path).expanduser()
-        try:
-            prepared = media.prepare(path)
-        except media.MediaError as exc:
-            log.error("%s", exc)
-            self._fail("Could not read that file", str(exc))
+        if self.state is State.RECORDING:
+            # Refuse *without* touching state. Overwriting RECORDING orphaned
+            # the live recorder -- finish_recording() only stops it from
+            # RECORDING -- and going through _fail() would do the same thing
+            # via ERROR. The dictation in progress is untouched and finishes
+            # normally when the key is released.
+            log.warning("Refusing to import %s while recording", path)
+            self.feedback.error()
+            self._emit(
+                "on_error",
+                "Finish dictating first",
+                "A file cannot be transcribed while the microphone is recording.",
+            )
             return
 
-        log.info(
-            "Importing %s (%s)", path.name,
-            "converted to 16 kHz mono" if prepared.converted else "used as-is",
-        )
+        path = Path(path).expanduser()
+        if not path.is_file():
+            self._fail("Could not read that file", f"No such file: {path}")
+            return
+
         self._set_state(State.TRANSCRIBING)
         self._jobs.put(Job(
-            audio=prepared.path,
+            audio=path,
             deliver=False,
             source="file",
             label=path.name,
-            cleanup=prepared.cleanup,
+            prepare=True,
         ))
 
     # -- cleanup and the dictionary ---------------------------------------
@@ -510,6 +540,18 @@ class DictationController:
         self.feedback.error()
         self._set_state(State.ERROR)
         self._emit("on_error", title, message)
-        recover = threading.Timer(3.0, lambda: self._set_state(State.IDLE))
+        recover = threading.Timer(3.0, self._recover_from_error)
         recover.daemon = True
         recover.start()
+
+    def _recover_from_error(self) -> None:
+        """Clear ERROR after its three seconds -- and only ERROR.
+
+        Setting IDLE unconditionally was a bug with a long fuse: press the
+        hotkey again inside the three-second window and the timer fired *over*
+        RECORDING. finish_recording() then saw the wrong state and returned
+        without stopping the recorder, leaving the microphone capturing until
+        the app quit.
+        """
+        if self.state is State.ERROR:
+            self._set_state(State.IDLE)
