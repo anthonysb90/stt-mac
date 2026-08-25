@@ -96,8 +96,13 @@ def _cmd_tap_test(seconds: float) -> int:
     bundle = permissions.bundle_path()
     print(f"  bundle      {bundle or 'NOT IN A BUNDLE — run the copy in /Applications'}")
     print(f"  signature   {permissions.signing_identity() or 'unknown'}")
+    valid, why = permissions.signature_valid()
+    print(f"  signature ok {'yes' if valid else 'NO — ' + why}")
     trusted = permissions.accessibility_trusted()
     print(f"  trusted     {trusted}")
+    if not valid:
+        print("\n  A signature that does not verify cannot hold a TCC grant, so")
+        print("  Accessibility will never stick until this is fixed.")
     if not trusted:
         print("\n  AXIsProcessTrusted says no. Everything below will be empty.")
 

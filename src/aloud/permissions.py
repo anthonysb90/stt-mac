@@ -119,6 +119,33 @@ def bundle_path() -> str:
     return path if path.endswith(".app") else ""
 
 
+def signature_valid() -> Tuple[bool, str]:
+    """Whether the bundle's signature actually verifies.
+
+    TCC will not honour a grant against a signature that does not check out,
+    and codesign accepting a signature at signing time does not mean the result
+    verifies afterwards -- `--deep` over an alias bundle that references a
+    Python framework outside itself is exactly the shape that produces one.
+    The symptom is a correct-looking identity and a permission that never
+    takes, which is indistinguishable from every other cause without asking.
+    """
+    bundle = bundle_path()
+    if not bundle:
+        return False, "not in a bundle"
+    try:
+        result = subprocess.run(
+            ["codesign", "--verify", "--deep", "--strict", "--verbose=2", bundle],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"could not run codesign: {exc}"
+
+    if result.returncode == 0:
+        return True, "valid"
+    detail = ((result.stderr or "") + (result.stdout or "")).strip().splitlines()
+    return False, detail[-1] if detail else f"exit {result.returncode}"
+
+
 def accessibility_advice() -> str:
     """What to actually do about a missing Accessibility grant, given how the
     app is signed. Returns the body of the alert."""
