@@ -68,7 +68,12 @@ def symlinks(bundle: Path):
     return sorted(found, key=lambda p: len(p.parts), reverse=True)
 
 
-def flatten(bundle: Path, dry_run: bool = False, delete: list | None = None) -> int:
+def flatten(
+    bundle: Path,
+    dry_run: bool = False,
+    delete: list | None = None,
+    copy_outward: bool = False,
+) -> int:
     bundle = bundle.resolve()
     if not bundle.is_dir():
         print(f"error: {bundle} is not a directory", file=sys.stderr)
@@ -112,6 +117,12 @@ def flatten(bundle: Path, dry_run: bool = False, delete: list | None = None) -> 
             kept += 1
             continue
 
+        if not copy_outward:
+            # Left in place: copying one of these broke the app twice. See the
+            # note in install_app.sh.
+            kept += 1
+            continue
+
         size = tree_size(target)
         total_bytes += size
         print(f"  copying in         {shown} -> {target_text}  ({human(size)})")
@@ -139,12 +150,17 @@ def main() -> int:
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--copy-outward", action="store_true",
+        help="replace links leaving the bundle with real copies (breaks alias "
+             "builds; see install_app.sh)",
+    )
+    parser.add_argument(
         "--delete", action="append", default=[],
         metavar="REL/PATH",
         help="bundle-relative symlink to remove rather than copy; repeatable",
     )
     args = parser.parse_args()
-    return flatten(args.bundle, args.dry_run, args.delete)
+    return flatten(args.bundle, args.dry_run, args.delete, args.copy_outward)
 
 
 if __name__ == "__main__":

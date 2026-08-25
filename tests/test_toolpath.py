@@ -334,7 +334,11 @@ def test_the_flattener_handles_every_kind_of_link(tmp_path):
     (bundle / "Contents" / "Resources" / "dangling").symlink_to("/nowhere/at/all")
 
     script = SRC.parent.parent / "scripts" / "flatten_bundle.py"
-    assert subprocess.run([sys.executable, str(script), str(bundle)]).returncode == 0
+    # --copy-outward: the opt-in path. The default deliberately leaves outward
+    # links alone, because copying them breaks a py2app alias build.
+    assert subprocess.run(
+        [sys.executable, str(script), str(bundle), "--copy-outward"]
+    ).returncode == 0
 
     copied = bundle / "Contents" / "MacOS" / "python"
     assert not copied.is_symlink(), "an outward link must become a real file"
@@ -363,10 +367,23 @@ def test_install_reports_a_missing_icon():
     assert "killall Dock" in script, "and bust the icon cache after replacing"
 
 
-def test_install_flattens_the_bundle_before_signing():
-    """codesign rejects symlinks leaving the bundle, and an alias build is
-    made of those. Flattening has to happen before the signature is taken."""
+def test_install_leaves_outward_links_alone_by_default():
+    """An alias build is made of links leaving the bundle. codesign will not
+    seal them, but every attempt to satisfy it broke the app: copying
+    Contents/MacOS/python loses the stdlib ("no module named encodings"),
+    deleting it segfaults py2app_main. A bundle that runs beats one that
+    verifies, so copying is opt-in behind ALOUD_FLATTEN."""
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
-    flatten = script.index("flatten_bundle.py")
-    assert flatten < script.index("codesign --force"), "flatten, then sign"
-    assert flatten < script.index('rm -rf "$INSTALLED"'), "and before uninstalling"
+    tidy = script.index("flatten_bundle.py")
+    assert tidy < script.index("codesign --force"), "tidy, then sign"
+    assert tidy < script.index('rm -rf "$INSTALLED"'), "and before uninstalling"
+    assert "ALOUD_FLATTEN" in script, "copying outward links must be opt-in"
+
+
+def test_a_failed_verification_does_not_block_the_install():
+    """The gate turned "an imperfect signature" into "no app at all"."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    verify = script.index("Verifying the signature")
+    tail = script[verify:script.index("--- 5. Replace")]
+    assert "exit 1" not in tail, "report the signature, do not refuse to install"
+    assert "does not verify (expected" in tail
