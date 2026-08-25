@@ -13,10 +13,9 @@ A local-first take on [Wispr Flow](https://wisprflow.ai/features). Transcription
 runs on your machine — Parakeet on Apple Silicon, faster-whisper on Intel — so
 nothing leaves it unless you switch to the cloud engine on purpose.
 
-> **Status: running on Intel, not yet on Apple Silicon.** The x86_64 machine
-> dictates, transcribes files and installs as an app. The arm64 path — Parakeet
-> on MLX — is written and covered by tests but has not been run on hardware; see
-> [Verification status](#verification-status).
+> **Status: running on Intel and on Apple Silicon.** Both machines dictate,
+> transcribe files, and install as an app with a working system-wide hotkey.
+> See [Verification status](#verification-status) for what is still untested.
 
 ---
 
@@ -260,13 +259,15 @@ rules, the latency budget, and who owns cleanup.
 
 ## Verification status
 
-* **Run on Intel (x86_64, macOS 26).** The hotkey and its event tap, PortAudio
-  capture, faster-whisper, the AppKit views, the py2app alias build, ad-hoc
-  signing and the TCC prompts all work on hardware.
-* **Not yet run on Apple Silicon.** Parakeet on MLX is the only substantially
-  different piece there — a different engine, a different Python floor (3.10+),
-  and ffmpeg as a hard dependency. `aloud doctor` names whichever of those is
-  missing before you hit it.
+* **Run on Intel (x86_64, macOS 26)** and **on Apple Silicon (arm64, macOS
+  14.5).** The hotkey and its event tap, PortAudio capture, faster-whisper and
+  Parakeet on MLX, the AppKit views, the py2app alias build, code signing and
+  the TCC grants all work on hardware.
+* **Getting the Accessibility grant to hold needs a stable signing identity.**
+  `make signing-cert`, once, before `make install`. Without it every rebuild is
+  a different app to macOS and the grant silently stops applying. `make
+  tap-test` reports what the event tap actually receives when something is
+  wrong.
 * **Never run anywhere** — live Deepgram and OpenAI calls. Both are covered by
   tests against a recorded request shape, not against the services.
 

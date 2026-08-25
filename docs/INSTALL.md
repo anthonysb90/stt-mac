@@ -258,27 +258,40 @@ It works on Apple Silicon, it just will not beat Parakeet. Purely optional.
 
 ---
 
-## Step 6 — Make a signing certificate (2 minutes, do it before building)
+## Step 6 — Make a signing certificate (do this before building)
 
-Optional, but do it *now* rather than later. Without one the app is **ad-hoc
-signed**, which gives it a new identity on every build: macOS treats each
-rebuild as a different app and makes you grant Accessibility again from
-scratch. With one, the permission you grant in step 8 survives every rebuild.
-
-1. Open **Keychain Access** (Spotlight it).
-2. Menu: **Keychain Access → Certificate Assistant → Create a Certificate…**
-3. Name: `Aloud Dev`. Identity Type: **Self Signed Root**. Certificate Type:
-   **Code Signing**. Click **Create**, then **Done**.
-
-Then make your shell use it, so you never have to remember:
+Do not skip this. Without a stable signing identity the app is **ad-hoc
+signed**, which derives its code identity from a hash of its contents — so
+every rebuild is a different app to macOS, and the Accessibility grant you make
+in step 8 stops applying. The Aloud row stays in System Settings with its
+switch on, looking correct, granting access to a build that no longer exists.
+That failure costs hours, because nothing about it points at code signing.
 
 ```sh
-echo 'export CODESIGN_IDENTITY="Aloud Dev"' >> ~/.zshrc
-source ~/.zshrc
+make signing-cert
 ```
 
-Skipping this is fine — everything still works, you just re-grant Accessibility
-after each rebuild.
+It creates a self-signed `Aloud Dev` certificate, trusts it for code signing
+(**it asks for your login password — that is the trust step, and skipping it
+leaves a certificate that lists fine and cannot sign**), and proves it by
+signing a throwaway file. You want it to end with `Ready.`
+
+`make install` finds it automatically from then on.
+
+**If it says the certificate exists but codesign will not use it:**
+
+```sh
+./scripts/make_signing_cert.sh --repair
+```
+
+That re-applies the trust setting, and clears duplicates — two certificates
+with the same name make codesign refuse outright (`ambiguous (matches "Aloud
+Dev" and "Aloud Dev")`), and re-running a partly-failed setup is all it takes
+to create two.
+
+**If it still will not work**, do the trust step in the GUI: **Keychain Access
+→ login → My Certificates → `Aloud Dev`** → double-click → expand **Trust** →
+**Code Signing: Always Trust**. Then re-run with `--repair`.
 
 ---
 
@@ -288,8 +301,19 @@ after each rebuild.
 make install
 ```
 
-It removes any previous copy first, builds, signs, installs, and then **starts
-the bundle to prove it works** before saying it succeeded.
+It removes any previous copy first, builds, prunes dangling symlinks, signs,
+**verifies the signature**, installs, and then **starts the bundle to prove it
+works** before saying it succeeded.
+
+The verification step is not ceremony. macOS will not hold an Accessibility
+grant against a signature that does not verify, so a bundle that fails it can
+never keep the permission no matter how many times you re-grant it. `make
+install` refuses to install one rather than let you find out later.
+
+The symlink pruning is for the same reason. An alias build links out to
+Homebrew's Python framework; when one of those links dangles, codesign reports
+it as *the whole bundle* being missing — `dist/Aloud.app: No such file or
+directory`, about a bundle sitting right in front of you.
 
 > **Never `cp -R` a bundle into `/Applications` by hand.** If `Aloud.app` is
 > already there, `cp -R dist/Aloud.app /Applications/` copies the new one
@@ -565,6 +589,22 @@ code.
 **"parakeet-mlx is not installed" on the M1.**
 Almost always Python: it needs 3.10+ and macOS ships 3.9. Redo step 3, then
 re-run bootstrap with `PYTHON_BIN=` pointing at the newer Python.
+
+**The hotkey works inside Aloud and nowhere else.**
+The event tap was created without Accessibility in effect. An untrusted tap is
+not refused — it is created, and only ever sees events aimed at Aloud itself,
+which looks identical to a broken keyboard. Find out what is actually true:
+
+```sh
+make tap-test
+```
+
+It runs inside the bundle (permissions attach to a code identity, so the same
+check from a terminal reports Terminal's access, not Aloud's) and prints the
+signing identity, whether the signature verifies, whether macOS considers the
+app trusted, and every modifier event it receives with the app that had focus.
+Fix whatever it names — usually `signature ok NO`, which no amount of
+re-granting can help.
 
 **"ffmpeg not found" — but `which ffmpeg` answers fine.**
 The app was launched from the Dock, and a Dock launch inherits none of your
