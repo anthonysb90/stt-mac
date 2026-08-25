@@ -43,7 +43,22 @@ rm -rf build dist
 [ -d "$BUILT" ] || die "py2app did not produce $BUILT"
 
 # --- 3. Sign ---------------------------------------------------------------
-IDENTITY="${CODESIGN_IDENTITY:--}"
+# Prefer a stable identity over ad-hoc. Ad-hoc signing derives the app's code
+# identity from a hash of its contents, so every rebuild is a different app to
+# macOS and the Accessibility grant made against the last build silently stops
+# applying -- while still showing as enabled in System Settings, which is what
+# makes it so hard to diagnose. scripts/make_signing_cert.sh creates one.
+IDENTITY="${CODESIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+  for candidate in "Aloud Dev"; do
+    if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$candidate"; then
+      IDENTITY="$candidate"
+      info "Found a stable signing identity: $candidate"
+      break
+    fi
+  done
+fi
+: "${IDENTITY:=-}"
 info "Signing as: $IDENTITY"
 codesign --force --deep --options runtime \
   --entitlements scripts/entitlements.plist \
@@ -80,6 +95,16 @@ if OUT=$("$INSTALLED/Contents/MacOS/Aloud" --version 2>"$ERRLOG"); then
   fi
   printf '\n\033[1;32m==>\033[0m Installed and working: %s\n' "$INSTALLED"
   printf '    Open it from Launchpad, then grant Accessibility and add it to Login Items.\n'
+  if [ "$IDENTITY" = "-" ]; then
+    printf '\n'
+    warn "Signed ad-hoc, so this build has a new code identity."
+    warn "Any Accessibility grant you made for an earlier build no longer applies,"
+    warn "even though System Settings still shows Aloud switched on."
+    printf '    Clear the stale entry and grant it once more:\n\n'
+    printf '        make fix-permissions\n\n'
+    printf '    To stop this recurring, make a stable identity once:\n\n'
+    printf '        ./scripts/make_signing_cert.sh\n'
+  fi
 else
   printf '\n\033[1;31m==>\033[0m The bundle does not start. The real error:\n\n' >&2
   printf '%s\n' "$OUT" | sed 's/^/    /' >&2

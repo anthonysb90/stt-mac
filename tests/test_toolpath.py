@@ -187,3 +187,55 @@ def test_our_own_text_io_never_relies_on_the_default_encoding():
             if "encoding" not in named:
                 offenders.append(f"{path.name}:{node.lineno}")
     assert not offenders, f"text I/O without an encoding: {offenders}"
+
+
+# -- the stale Accessibility grant ------------------------------------------
+
+
+def test_ad_hoc_advice_names_the_real_cause(monkeypatch):
+    """Repeating instructions someone has already followed is worse than
+    saying nothing; an ad-hoc build must explain why the grant went stale."""
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "signing_identity", lambda: "ad-hoc")
+    advice = permissions.accessibility_advice()
+    assert "ad-hoc" in advice
+    assert "earlier build" in advice
+    assert "make_signing_cert" in advice, "and how to stop it recurring"
+
+
+def test_stable_signing_gets_the_plain_advice(monkeypatch):
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "signing_identity", lambda: "Aloud Dev")
+    advice = permissions.accessibility_advice()
+    assert "ad-hoc" not in advice
+    assert "Accessibility" in advice
+
+
+def test_summary_flags_ad_hoc_only_when_access_is_missing(monkeypatch):
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "signing_identity", lambda: "ad-hoc")
+    monkeypatch.setattr(permissions, "microphone_authorized", lambda: (True, "authorized"))
+
+    monkeypatch.setattr(permissions, "accessibility_trusted", lambda: False)
+    assert "ad-hoc signed" in permissions.summary()
+
+    monkeypatch.setattr(permissions, "accessibility_trusted", lambda: True)
+    assert "ad-hoc" not in permissions.summary(), "nothing is wrong; say nothing"
+
+
+def test_signing_identity_is_blank_outside_a_bundle(monkeypatch):
+    """Running from the terminal has no .app, so there is nothing to inspect."""
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "bundle_path", lambda: "")
+    assert permissions.signing_identity() == ""
+
+
+def test_install_prefers_a_stable_identity_over_ad_hoc():
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    assert "find-identity" in script, "install must look for a stable identity"
+    assert "Aloud Dev" in script
+    assert "make fix-permissions" in script, "and say what to do when ad-hoc"

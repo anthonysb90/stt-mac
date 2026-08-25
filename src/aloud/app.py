@@ -133,8 +133,8 @@ class AloudDelegate(Foundation.NSObject):
             self._alert(
                 "Accessibility access required",
                 f"{APP_NAME} needs Accessibility access to see the hotkey and to "
-                f"paste your text into other apps.\n\nAdd {APP_NAME} under Privacy "
-                f"& Security → Accessibility, then quit and reopen it.",
+                f"paste your text into other apps.\n\n"
+                + permissions.accessibility_advice(),
             )
             permissions.open_accessibility_settings()
 

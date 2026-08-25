@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+#
+# Create a stable code-signing identity, so the Accessibility grant survives
+# a rebuild.
+#
+#   ./scripts/make_signing_cert.sh
+#
+# Why this exists
+# ---------------
+# macOS attaches a TCC grant (Accessibility, Microphone) to an app's *code
+# identity*, not to its path. Ad-hoc signing -- `codesign --sign -`, the
+# default when no identity is named -- computes that identity from a hash of
+# the bundle's contents, so every rebuild produces a different app as far as
+# macOS is concerned.
+#
+# The symptom is maddening and gives no clue: Aloud sits in the Accessibility
+# list with its switch on, and still reports no access, because the grant
+# belongs to the build before last. Re-granting fixes it until the next
+# rebuild.
+#
+# A self-signed certificate makes the identity stable, so the grant is made
+# once and then stays made.
+set -uo pipefail
+
+NAME="${1:-Aloud Dev}"
+KEYCHAIN="${KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
+
+info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+warn()  { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
+die()   { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ "$(uname -s)" = "Darwin" ] || die "macOS only."
+
+if security find-identity -v -p codesigning | grep -qF "$NAME"; then
+  info "Already have a signing identity called '$NAME'. Nothing to do."
+  info "Build with it:  CODESIGN_IDENTITY=\"$NAME\" make install"
+  exit 0
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+# A config file rather than -addext: LibreSSL ships as `openssl` on macOS and
+# does not accept -addext on every version.
+cat >"$WORK/cert.cnf" <<CONF
+[req]
+distinguished_name = dn
+x509_extensions = v3
+prompt = no
+[dn]
+CN = $NAME
+[v3]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CONF
+
+info "Generating a self-signed code-signing certificate: $NAME"
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -config "$WORK/cert.cnf" \
+  -keyout "$WORK/key.pem" -out "$WORK/cert.pem" 2>/dev/null \
+  || die "openssl could not generate the certificate."
+
+openssl pkcs12 -export -out "$WORK/identity.p12" \
+  -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
+  -name "$NAME" -passout pass: 2>/dev/null \
+  || die "openssl could not package the certificate."
+
+info "Importing it into your login keychain"
+# -A lets codesign use the private key without a prompt on every build.
+security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "" -A \
+  || die "Could not import the identity into $KEYCHAIN"
+
+info "Marking it trusted for code signing"
+warn "macOS will ask for your login password — that is this step, and it is the only prompt."
+if ! security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$WORK/cert.pem"; then
+  warn "Could not set the trust setting automatically."
+  warn "Open Keychain Access, find '$NAME' under login > My Certificates,"
+  warn "double-click it, expand Trust, and set 'Code Signing' to 'Always Trust'."
+fi
+
+if security find-identity -v -p codesigning | grep -qF "$NAME"; then
+  printf '\n\033[1;32m==>\033[0m Ready. Sign with it every time:\n\n'
+  printf '    CODESIGN_IDENTITY="%s" make install\n\n' "$NAME"
+  printf '    install_app.sh also picks it up automatically now that it exists.\n'
+  printf '    Grant Accessibility once more after the next install; it sticks from then on.\n'
+else
+  die "The identity was created but is not usable for code signing yet.
+    Set 'Code Signing' to 'Always Trust' on '$NAME' in Keychain Access, then re-run."
+fi

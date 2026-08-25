@@ -73,6 +73,14 @@ diagnose: ## Run the installed app's binary directly to see the real error
 install: ## Build Aloud.app, install it to /Applications, and verify it starts
 	./scripts/install_app.sh
 
+.PHONY: fix-permissions
+fix-permissions: ## Clear a stale Accessibility grant left by an earlier build
+	./scripts/fix_permissions.sh
+
+.PHONY: signing-cert
+signing-cert: ## Make a stable signing identity so permissions survive rebuilds
+	./scripts/make_signing_cert.sh
+
 .PHONY: login-item
 login-item: ## Run Aloud at login straight from this folder, without a bundle
 	./scripts/login_item.sh install

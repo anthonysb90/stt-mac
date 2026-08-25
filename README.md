@@ -281,10 +281,22 @@ script passes `bash -n`.
 
 ## Troubleshooting
 
-**The hotkey does nothing.** Accessibility is not granted, or it was granted to
-a previous build. Menu → *Check Permissions…*. After an ad-hoc-signed rebuild
-you have to remove and re-add Aloud in the Accessibility list — see the
-signing note in the architecture doc for how to avoid that.
+**The hotkey does nothing, and Aloud is already switched on under
+Accessibility.** The switch belongs to a *previous build*. Ad-hoc signing
+derives the app's identity from a hash of its contents, so every rebuild is a
+different app to macOS while the old row stays in the list looking correct.
+
+```sh
+make fix-permissions     # clears the stale entry, then re-grant once
+```
+
+To stop it recurring, make a stable signing identity once:
+
+```sh
+make signing-cert        # then `make install` picks it up automatically
+```
+
+After that the grant survives every rebuild.
 
 **Text goes to the wrong place.** `paste` mode sends Cmd-V to whatever has
 focus. Don't click away while it's transcribing.
