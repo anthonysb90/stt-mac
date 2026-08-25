@@ -273,9 +273,13 @@ def test_install_refuses_to_fall_back_to_ad_hoc_silently():
     assert 'if [ "$IDENTITY" != "-" ]; then' in script
     assert "exit 1" in script
     assert "codesign failed" in script, "and show codesign's own error"
-    assert 'codesign --force --deep --options runtime \\\n    --entitlements' in script, (
-        "stderr must be captured, not sent to /dev/null"
+    assert '2>"$SIGNERR"' in script, "stderr must be captured, not /dev/null"
+    assert "--deep" not in script, (
+        "--deep walks an alias bundle's symlinks out to Homebrew and this "
+        "checkout, producing a signature that cannot verify -- and TCC will "
+        "not hold a grant against one that does not verify"
     )
+    assert "--verify --strict" in script, "verify before installing, not after"
 
 
 def test_the_cert_script_tests_signing_rather_than_trusting_the_listing():

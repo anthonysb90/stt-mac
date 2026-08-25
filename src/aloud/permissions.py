@@ -134,7 +134,10 @@ def signature_valid() -> Tuple[bool, str]:
         return False, "not in a bundle"
     try:
         result = subprocess.run(
-            ["codesign", "--verify", "--deep", "--strict", "--verbose=2", bundle],
+            # No --deep: it follows the alias bundle's symlinks out to Homebrew
+            # and this checkout, and reports their absence as the bundle's own
+            # failure. What TCC cares about is this bundle's signature.
+            ["codesign", "--verify", "--strict", "--verbose=2", bundle],
             capture_output=True, text=True, timeout=60, check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:

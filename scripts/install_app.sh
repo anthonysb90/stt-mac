@@ -75,7 +75,14 @@ fi
 : "${IDENTITY_LABEL:=$IDENTITY}"
 info "Signing as: $IDENTITY_LABEL"
 SIGNERR="$(mktemp -t aloud-codesign)"
-if codesign --force --deep --options runtime \
+# No --deep. Apple deprecated it, and on an alias bundle it is actively wrong:
+# the bundle's Frameworks and MacOS entries are symlinks pointing at Homebrew's
+# Python and at this checkout, so --deep walks outside the bundle, tries to
+# re-sign files it does not own, and produces a signature that cannot be
+# verified afterwards -- which is worse than no signature, because TCC will
+# not hold a grant against one that does not verify. Signing the bundle itself
+# is what the Accessibility grant is keyed to.
+if codesign --force --options runtime \
     --entitlements scripts/entitlements.plist \
     --sign "$IDENTITY" "$BUILT" 2>"$SIGNERR"; then
   rm -f "$SIGNERR"
@@ -97,6 +104,17 @@ else
     exit 1
   fi
   warn "Ad-hoc signing failed; continuing, but permissions will not stick."
+fi
+
+info "Verifying the signature"
+if VERIFY_OUT=$(codesign --verify --strict --verbose=2 "$BUILT" 2>&1); then
+  field "signature" "verifies"
+else
+  printf '\n\033[1;31m==>\033[0m The signature does not verify:\n\n' >&2
+  printf '%s\n' "$VERIFY_OUT" | sed 's/^/    /' >&2
+  printf '\n    macOS will not hold an Accessibility grant against a signature\n' >&2
+  printf '    that does not verify, so installing this would waste your time.\n' >&2
+  exit 1
 fi
 
 # --- 4. Install ------------------------------------------------------------
