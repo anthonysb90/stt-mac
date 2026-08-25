@@ -259,3 +259,28 @@ def test_the_signing_cert_proves_itself_by_signing():
     would only surface at the next install."""
     script = (SRC.parent.parent / "scripts" / "make_signing_cert.sh").read_text()
     assert "codesign --force --sign" in script
+
+
+def test_install_refuses_to_fall_back_to_ad_hoc_silently():
+    """A named identity that fails to sign must stop the install.
+
+    Continuing produced exactly the failure the mechanism exists to prevent:
+    the bundle keeps the linker's ad-hoc signature, the code identity changes
+    again, the Accessibility grant stops applying, and the only clue is one
+    warning line in a wall of green output.
+    """
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    assert 'if [ "$IDENTITY" != "-" ]; then' in script
+    assert "exit 1" in script
+    assert "codesign failed" in script, "and show codesign's own error"
+    assert 'codesign --force --deep --options runtime \\\n    --entitlements' in script, (
+        "stderr must be captured, not sent to /dev/null"
+    )
+
+
+def test_the_cert_script_tests_signing_rather_than_trusting_the_listing():
+    """`find-identity` lists an untrusted self-signed cert perfectly well."""
+    script = (SRC.parent.parent / "scripts" / "make_signing_cert.sh").read_text()
+    assert "can_sign()" in script
+    assert "repair_trust()" in script
+    assert "--repair" in script, "and offer a way to fix an existing one"

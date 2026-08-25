@@ -22,6 +22,9 @@
 # once and then stays made.
 set -uo pipefail
 
+REPAIR=0
+if [ "${1:-}" = "--repair" ]; then REPAIR=1; shift; fi
+
 NAME="${1:-Aloud Dev}"
 KEYCHAIN="${KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
 
@@ -31,10 +34,62 @@ die()   { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(uname -s)" = "Darwin" ] || die "macOS only."
 
+# Does the identity actually sign? `find-identity` listing it is not the same
+# question: a self-signed certificate that is not trusted for code signing
+# lists perfectly well and then fails to build a chain. Believing the listing
+# is what let a broken identity reach `make install`, where it fell back to
+# ad-hoc and undid the entire point.
+can_sign() {
+  local probe
+  probe="$(mktemp -t aloud-probe)"
+  printf '#!/bin/sh\nexit 0\n' >"$probe"
+  chmod +x "$probe"
+  codesign --force --sign "$NAME" "$probe" 2>"$probe.err"
+  local status=$?
+  [ $status -ne 0 ] && LAST_SIGN_ERROR="$(cat "$probe.err")"
+  rm -f "$probe" "$probe.err"
+  return $status
+}
+
+# Re-apply the code-signing trust setting to a certificate already in the
+# keychain. This is the step that fails most often -- it needs a password, so
+# it is the one that gets cancelled or skipped.
+repair_trust() {
+  local pem
+  pem="$(mktemp -t aloud-cert).pem"
+  if ! security find-certificate -c "$NAME" -p >"$pem" 2>/dev/null; then
+    rm -f "$pem"
+    return 1
+  fi
+  warn "macOS will ask for your login password — that is the trust setting."
+  security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$pem"
+  local status=$?
+  rm -f "$pem"
+  return $status
+}
+
+LAST_SIGN_ERROR=""
 if security find-identity -v -p codesigning | grep -qF "$NAME"; then
-  info "Already have a signing identity called '$NAME'. Nothing to do."
-  info "Build with it:  CODESIGN_IDENTITY=\"$NAME\" make install"
-  exit 0
+  if [ "$REPAIR" = "0" ] && can_sign; then
+    info "'$NAME' is present and codesign accepts it. Nothing to do."
+    info "Build with it:  make install"
+    exit 0
+  fi
+
+  info "'$NAME' exists but codesign will not use it:"
+  printf '%s\n' "$LAST_SIGN_ERROR" | sed 's/^/    /'
+  info "Re-applying the code-signing trust setting"
+  repair_trust || warn "Could not set it automatically."
+
+  if can_sign; then
+    printf '\n\033[1;32m==>\033[0m Repaired. Now:  make install && make fix-permissions\n'
+    exit 0
+  fi
+  printf '%s\n' "$LAST_SIGN_ERROR" | sed 's/^/    /' >&2
+  die "Still unusable. Fix it in the GUI:
+    Keychain Access > login > My Certificates > '$NAME'
+    Double-click it, expand Trust, set 'Code Signing' to 'Always Trust'.
+    Then re-run:  ./scripts/make_signing_cert.sh --repair"
 fi
 
 WORK="$(mktemp -d)"
@@ -111,16 +166,14 @@ security find-identity -v -p codesigning | grep -qF "$NAME" \
 # it -- an untrusted self-signed root lists fine and then fails to build a
 # chain, which would only show up at the next `make install`.
 info "Test-signing with it"
-printf '#!/bin/sh\nexit 0\n' >"$WORK/probe"
-chmod +x "$WORK/probe"
-if codesign --force --sign "$NAME" "$WORK/probe" 2>"$WORK/signerr"; then
+if can_sign; then
   printf '\n\033[1;32m==>\033[0m Ready. Sign with it every time:\n\n'
   printf '    CODESIGN_IDENTITY="%s" make install\n\n' "$NAME"
   printf '    install_app.sh also picks it up automatically now that it exists.\n'
   printf '    Grant Accessibility once more after the next install; it sticks from then on.\n'
 else
   warn "The identity exists but codesign will not use it yet:"
-  sed 's/^/    /' "$WORK/signerr" >&2
+  printf '%s\n' "$LAST_SIGN_ERROR" | sed 's/^/    /' >&2
   die "Open Keychain Access, find '$NAME' under login > My Certificates,
     double-click it, expand Trust, set 'Code Signing' to 'Always Trust',
     then re-run this script."

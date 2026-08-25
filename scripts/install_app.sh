@@ -60,10 +60,30 @@ if [ -z "$IDENTITY" ]; then
 fi
 : "${IDENTITY:=-}"
 info "Signing as: $IDENTITY"
-codesign --force --deep --options runtime \
-  --entitlements scripts/entitlements.plist \
-  --sign "$IDENTITY" "$BUILT" >/dev/null 2>&1 \
-  || warn "Signing failed; the app will still run but permissions may not stick."
+SIGNERR="$(mktemp -t aloud-codesign)"
+if codesign --force --deep --options runtime \
+    --entitlements scripts/entitlements.plist \
+    --sign "$IDENTITY" "$BUILT" 2>"$SIGNERR"; then
+  rm -f "$SIGNERR"
+else
+  # Never a warning when a real identity was asked for. Continuing produced
+  # exactly the failure this whole mechanism exists to prevent: the build
+  # falls back to the ad-hoc signature the linker already applied, the code
+  # identity changes again, the Accessibility grant stops applying, and the
+  # only clue was one yellow line in a wall of green output.
+  printf '\n\033[1;31m==>\033[0m codesign failed. Its error:\n\n' >&2
+  sed 's/^/    /' "$SIGNERR" >&2
+  rm -f "$SIGNERR"
+  if [ "$IDENTITY" != "-" ]; then
+    printf '\n    The identity "%s" is listed but codesign will not use it.\n' "$IDENTITY" >&2
+    printf '    Usually the certificate is not trusted for code signing yet:\n\n' >&2
+    printf '        ./scripts/make_signing_cert.sh --repair\n\n' >&2
+    printf '    Signing ad-hoc instead would leave you exactly where you started,\n' >&2
+    printf '    so this stops here rather than installing something broken.\n' >&2
+    exit 1
+  fi
+  warn "Ad-hoc signing failed; continuing, but permissions will not stick."
+fi
 
 # --- 4. Install ------------------------------------------------------------
 info "Installing to $INSTALLED"
