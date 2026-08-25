@@ -46,28 +46,19 @@ fi
 }
 [ -d "$BUILT" ] || die "py2app did not produce $BUILT"
 
-# --- 2. Prune broken symlinks ---------------------------------------------
-# An alias build links out to Homebrew's Python framework and to this checkout.
-# When one of those links dangles, `codesign --verify` reports it as the whole
-# bundle being missing -- "dist/Aloud.app: No such file or directory" -- which
-# sends you looking for a bundle that is plainly right there. A dangling link
-# points at nothing by definition, so removing it costs the app nothing and is
-# the difference between a signature that verifies and one that cannot.
-info "Checking for broken symlinks"
-BROKEN=0
-while IFS= read -r link; do
-  [ -e "$link" ] && continue
-  warn "broken: ${link#"$BUILT"/} -> $(readlink "$link")"
-  rm -f "$link"
-  BROKEN=$((BROKEN + 1))
-done <<EOF
-$(find "$BUILT" -type l 2>/dev/null)
-EOF
-if [ "$BROKEN" -gt 0 ]; then
-  info "Removed $BROKEN broken symlink(s) before signing."
-else
-  info "None."
-fi
+# --- 2. Flatten the bundle -------------------------------------------------
+# codesign rejects any symlink pointing outside the bundle:
+#
+#     dist/Aloud.app: invalid destination for symbolic link in bundle
+#
+# An alias build is made of exactly those links -- pointing at the virtualenv
+# and at Homebrew instead of carrying copies. It runs fine and cannot be
+# validly signed, and macOS will not hold an Accessibility grant against a
+# signature that does not verify. So the outward links are replaced with real
+# files, and dangling ones removed, before anything is signed.
+info "Flattening outward symlinks"
+./.venv/bin/python scripts/flatten_bundle.py "$BUILT" \
+  || die "Could not flatten $BUILT"
 
 # --- 3. Sign ---------------------------------------------------------------
 # Prefer a stable identity over ad-hoc. Ad-hoc signing derives the app's code

@@ -73,9 +73,16 @@ install)
 PLISTEOF
 
   launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
-    || launchctl load -w "$PLIST" 2>/dev/null \
-    || die "launchctl refused to load $PLIST"
+  LOADERR="$(mktemp -t aloud-launchctl)"
+  if ! launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>"$LOADERR" \
+     && ! launchctl load -w "$PLIST" 2>>"$LOADERR"; then
+    # launchctl's reasons are specific and worth reading -- a bad plist and a
+    # denied session report quite differently.
+    sed 's/^/    /' "$LOADERR" >&2
+    rm -f "$LOADERR"
+    die "launchctl refused to load $PLIST"
+  fi
+  rm -f "$LOADERR"
 
   info "Installed and started."
   info "Log: $LOG_DIR/launchagent.log"

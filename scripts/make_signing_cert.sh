@@ -78,15 +78,22 @@ can_sign() {
 # recreated immediately below.
 forget_duplicates() {
   local removed=0
+  local err
+  err="$(mktemp -t aloud-delete)"
   while security find-certificate -c "$NAME" >/dev/null 2>&1; do
-    if security delete-identity -c "$NAME" >/dev/null 2>&1 \
-       || security delete-certificate -c "$NAME" >/dev/null 2>&1; then
+    if security delete-identity -c "$NAME" >"$err" 2>&1 \
+       || security delete-certificate -c "$NAME" >"$err" 2>&1; then
       removed=$((removed + 1))
       [ "$removed" -gt 20 ] && break
     else
+      # Say why. Leaving duplicates in place makes every later step report a
+      # different symptom of the same ambiguity.
+      warn "Could not remove a '$NAME' certificate:"
+      sed 's/^/    /' "$err" >&2
       break
     fi
   done
+  rm -f "$err"
   [ "$removed" -gt 0 ] && info "Removed $removed old '$NAME' certificate(s)."
   return 0
 }
@@ -97,10 +104,13 @@ forget_duplicates() {
 repair_trust() {
   local pem
   pem="$(mktemp -t aloud-cert).pem"
-  if ! security find-certificate -c "$NAME" -p >"$pem" 2>/dev/null; then
-    rm -f "$pem"
+  if ! security find-certificate -c "$NAME" -p >"$pem" 2>"$pem.err"; then
+    warn "Could not export '$NAME' from the keychain:"
+    sed 's/^/    /' "$pem.err" >&2
+    rm -f "$pem" "$pem.err"
     return 1
   fi
+  rm -f "$pem.err"
   warn "macOS will ask for your login password — that is the trust setting."
   security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$pem"
   local status=$?
@@ -162,10 +172,12 @@ extendedKeyUsage = critical,codeSigning
 CONF
 
 info "Generating a self-signed code-signing certificate: $NAME"
-openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-  -config "$WORK/cert.cnf" \
-  -keyout "$WORK/key.pem" -out "$WORK/cert.pem" 2>/dev/null \
-  || die "openssl could not generate the certificate."
+if ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    -config "$WORK/cert.cnf" \
+    -keyout "$WORK/key.pem" -out "$WORK/cert.pem" 2>"$WORK/openssl.err"; then
+  sed 's/^/    /' "$WORK/openssl.err" >&2
+  die "openssl could not generate the certificate."
+fi
 
 # A real password, not an empty one: Apple's SecKeychainItemImport rejects
 # empty-password PKCS#12 files with "MAC verification failed (wrong
@@ -178,9 +190,11 @@ PASSWORD="$(openssl rand -hex 16)"
 # /usr/bin/openssl is on macOS -- already produces these, but accepts being
 # told. If a build accepts neither spelling, fall back to plain defaults.
 package() {
+  # Kept, not discarded: the last error hidden here was the empty-password
+  # rejection, and it took a round trip to recover.
   openssl pkcs12 -export -out "$WORK/identity.p12" \
     -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-    -name "$NAME" -passout "pass:$PASSWORD" "$@" 2>/dev/null
+    -name "$NAME" -passout "pass:$PASSWORD" "$@" 2>"$WORK/pkcs12.err"
 }
 
 if package -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1; then
@@ -190,6 +204,7 @@ elif package -legacy; then
 elif package; then
   warn "Packaged with this openssl's defaults; the import may not accept them."
 else
+  [ -s "$WORK/pkcs12.err" ] && sed 's/^/    /' "$WORK/pkcs12.err" >&2
   die "openssl could not package the certificate."
 fi
 

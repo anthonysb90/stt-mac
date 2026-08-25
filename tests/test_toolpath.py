@@ -311,20 +311,36 @@ def test_signing_resolves_the_identity_to_a_hash():
     assert "forget_duplicates()" in cert, "and clear duplicates rather than pick"
 
 
-def test_install_prunes_broken_symlinks_before_signing():
-    """A dangling link makes codesign report the whole bundle as missing:
+def test_the_flattener_handles_every_kind_of_link(tmp_path):
+    """Three cases needing three answers, and getting them wrong is silent.
 
-        dist/Aloud.app: No such file or directory
-
-    which sends you looking for a bundle that is plainly there. An alias build
-    links out to Homebrew's Python and to the checkout, so dangling links are
-    normal; they point at nothing, so removing them costs the app nothing.
+    An outward link must become a real file (codesign rejects it otherwise), a
+    dangling one must go (it cannot be copied or verified), and an internal one
+    must survive untouched.
     """
-    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
-    prune = script.index("Checking for broken symlinks")
-    sign = script.index("--- 3. Sign")
-    assert prune < sign, "pruning has to happen before signing, not after"
-    assert "find \"$BUILT\" -type l" in script
+    import subprocess
+    import sys
+
+    bundle = tmp_path / "App.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    (bundle / "Contents" / "Resources").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "python").write_text("real binary", encoding="utf-8")
+    (bundle / "Contents" / "Resources" / "real.txt").write_text("in", encoding="utf-8")
+
+    (bundle / "Contents" / "MacOS" / "python").symlink_to(outside / "python")
+    (bundle / "Contents" / "MacOS" / "inward").symlink_to("../Resources/real.txt")
+    (bundle / "Contents" / "Resources" / "dangling").symlink_to("/nowhere/at/all")
+
+    script = SRC.parent.parent / "scripts" / "flatten_bundle.py"
+    assert subprocess.run([sys.executable, str(script), str(bundle)]).returncode == 0
+
+    copied = bundle / "Contents" / "MacOS" / "python"
+    assert not copied.is_symlink(), "an outward link must become a real file"
+    assert copied.read_text(encoding="utf-8") == "real binary"
+    assert not (bundle / "Contents" / "Resources" / "dangling").exists()
+    assert (bundle / "Contents" / "MacOS" / "inward").is_symlink(), "internal links stay"
 
 
 def test_install_never_removes_the_app_before_it_has_a_replacement():
@@ -345,3 +361,12 @@ def test_install_reports_a_missing_icon():
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
     assert "CFBundleIconFile" in script
     assert "killall Dock" in script, "and bust the icon cache after replacing"
+
+
+def test_install_flattens_the_bundle_before_signing():
+    """codesign rejects symlinks leaving the bundle, and an alias build is
+    made of those. Flattening has to happen before the signature is taken."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    flatten = script.index("flatten_bundle.py")
+    assert flatten < script.index("codesign --force"), "flatten, then sign"
+    assert flatten < script.index('rm -rf "$INSTALLED"'), "and before uninstalling"
