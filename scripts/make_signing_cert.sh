@@ -61,15 +61,39 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
   -keyout "$WORK/key.pem" -out "$WORK/cert.pem" 2>/dev/null \
   || die "openssl could not generate the certificate."
 
-openssl pkcs12 -export -out "$WORK/identity.p12" \
-  -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-  -name "$NAME" -passout pass: 2>/dev/null \
-  || die "openssl could not package the certificate."
+# A real password, not an empty one: Apple's SecKeychainItemImport rejects
+# empty-password PKCS#12 files with "MAC verification failed (wrong
+# password?)", which reads as a corrupt file rather than the policy it is.
+# The password never leaves this script.
+PASSWORD="$(openssl rand -hex 16)"
+
+# Apple's importer also predates OpenSSL 3's defaults (AES-256 + SHA-256) and
+# cannot read them, so ask for the older algorithms. LibreSSL -- which is what
+# /usr/bin/openssl is on macOS -- already produces these, but accepts being
+# told. If a build accepts neither spelling, fall back to plain defaults.
+package() {
+  openssl pkcs12 -export -out "$WORK/identity.p12" \
+    -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
+    -name "$NAME" -passout "pass:$PASSWORD" "$@" 2>/dev/null
+}
+
+if package -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1; then
+  :
+elif package -legacy; then
+  info "Used OpenSSL's -legacy packaging."
+elif package; then
+  warn "Packaged with this openssl's defaults; the import may not accept them."
+else
+  die "openssl could not package the certificate."
+fi
 
 info "Importing it into your login keychain"
 # -A lets codesign use the private key without a prompt on every build.
-security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "" -A \
-  || die "Could not import the identity into $KEYCHAIN"
+security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "$PASSWORD" -A \
+  || die "Could not import the identity into $KEYCHAIN
+    If this keeps failing, make the certificate by hand instead:
+      Keychain Access > Certificate Assistant > Create a Certificate...
+      Name: $NAME   Identity Type: Self Signed Root   Type: Code Signing"
 
 info "Marking it trusted for code signing"
 warn "macOS will ask for your login password — that is this step, and it is the only prompt."
@@ -79,12 +103,25 @@ if ! security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$WORK/ce
   warn "double-click it, expand Trust, and set 'Code Signing' to 'Always Trust'."
 fi
 
-if security find-identity -v -p codesigning | grep -qF "$NAME"; then
+security find-identity -v -p codesigning | grep -qF "$NAME" \
+  || die "The identity was created but is not listed for code signing yet.
+    Set 'Code Signing' to 'Always Trust' on '$NAME' in Keychain Access, then re-run."
+
+# The real test. find-identity listing it does not prove codesign will accept
+# it -- an untrusted self-signed root lists fine and then fails to build a
+# chain, which would only show up at the next `make install`.
+info "Test-signing with it"
+printf '#!/bin/sh\nexit 0\n' >"$WORK/probe"
+chmod +x "$WORK/probe"
+if codesign --force --sign "$NAME" "$WORK/probe" 2>"$WORK/signerr"; then
   printf '\n\033[1;32m==>\033[0m Ready. Sign with it every time:\n\n'
   printf '    CODESIGN_IDENTITY="%s" make install\n\n' "$NAME"
   printf '    install_app.sh also picks it up automatically now that it exists.\n'
   printf '    Grant Accessibility once more after the next install; it sticks from then on.\n'
 else
-  die "The identity was created but is not usable for code signing yet.
-    Set 'Code Signing' to 'Always Trust' on '$NAME' in Keychain Access, then re-run."
+  warn "The identity exists but codesign will not use it yet:"
+  sed 's/^/    /' "$WORK/signerr" >&2
+  die "Open Keychain Access, find '$NAME' under login > My Certificates,
+    double-click it, expand Trust, set 'Code Signing' to 'Always Trust',
+    then re-run this script."
 fi

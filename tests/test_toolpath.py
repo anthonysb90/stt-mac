@@ -239,3 +239,23 @@ def test_install_prefers_a_stable_identity_over_ad_hoc():
     assert "find-identity" in script, "install must look for a stable identity"
     assert "Aloud Dev" in script
     assert "make fix-permissions" in script, "and say what to do when ad-hoc"
+
+
+def test_the_signing_cert_uses_a_real_password():
+    """Apple's SecKeychainItemImport rejects empty-password PKCS#12 files with
+    "MAC verification failed (wrong password?)", which reads like a corrupt
+    file rather than the policy it is. That shipped and blocked the install."""
+    script = (SRC.parent.parent / "scripts" / "make_signing_cert.sh").read_text()
+    assert "openssl rand" in script, "generate a password"
+    assert "-passout pass:\n" not in script and '-passout pass: ' not in script, (
+        "an empty PKCS#12 password fails to import on macOS"
+    )
+    assert '-P "$PASSWORD"' in script, "and import with the same password"
+
+
+def test_the_signing_cert_proves_itself_by_signing():
+    """find-identity listing a cert does not mean codesign will accept it: an
+    untrusted self-signed root lists fine and fails to build a chain, which
+    would only surface at the next install."""
+    script = (SRC.parent.parent / "scripts" / "make_signing_cert.sh").read_text()
+    assert "codesign --force --sign" in script
