@@ -73,6 +73,10 @@ diagnose: ## Run the installed app's binary directly to see the real error
 install: ## Build Aloud.app, install it to /Applications, and verify it starts
 	./scripts/install_app.sh
 
+.PHONY: tap-test
+tap-test: ## Report what the installed app's hotkey tap actually receives
+	/Applications/Aloud.app/Contents/MacOS/Aloud tap-test
+
 .PHONY: fix-permissions
 fix-permissions: ## Clear a stale Accessibility grant left by an earlier build
 	./scripts/fix_permissions.sh
