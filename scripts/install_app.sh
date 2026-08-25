@@ -22,19 +22,23 @@ field() { printf '    %-22s %s\n' "$1" "$2"; }
 
 [ -x .venv/bin/python ] || die "No .venv — run ./scripts/bootstrap.sh first."
 
-# --- 1. Clear out whatever is there, including a nested mistake ------------
-if [ -e "$INSTALLED" ]; then
-  if [ -e "$INSTALLED/Aloud.app" ]; then
-    warn "Found a nested bundle at $INSTALLED/Aloud.app — that is the cp bug."
-  fi
-  info "Removing the existing $INSTALLED"
-  rm -rf "$INSTALLED" || die "Could not remove $INSTALLED"
-fi
+# Nothing below touches /Applications until a new bundle has been built,
+# signed and verified. The old order removed the installed app first, so any
+# later failure left the Mac with no app at all -- which is how a signature
+# check that correctly refused a bad bundle also uninstalled a working one.
+# Build first, prove it, then swap.
 
-# --- 2. Build --------------------------------------------------------------
+# --- 1. Build --------------------------------------------------------------
 info "Building"
 rm -rf build dist
-./scripts/make_icns.sh >/dev/null 2>&1 || warn "Icon generation failed; continuing without one."
+ICONERR="$(mktemp -t aloud-icon)"
+if ./scripts/make_icns.sh >"$ICONERR" 2>&1; then
+  rm -f "$ICONERR"
+else
+  warn "Icon generation failed; the app will show a generic icon:"
+  sed 's/^/    /' "$ICONERR" >&2
+  rm -f "$ICONERR"
+fi
 ./.venv/bin/python setup.py py2app -A >/tmp/aloud-build.log 2>&1 || {
   printf '\033[1;31m==>\033[0m Build failed:\n' >&2
   tail -30 /tmp/aloud-build.log | sed 's/^/    /' >&2
@@ -42,7 +46,7 @@ rm -rf build dist
 }
 [ -d "$BUILT" ] || die "py2app did not produce $BUILT"
 
-# --- 2b. Prune broken symlinks --------------------------------------------
+# --- 2. Prune broken symlinks ---------------------------------------------
 # An alias build links out to Homebrew's Python framework and to this checkout.
 # When one of those links dangles, `codesign --verify` reports it as the whole
 # bundle being missing -- "dist/Aloud.app: No such file or directory" -- which
@@ -129,6 +133,7 @@ else
   warn "Ad-hoc signing failed; continuing, but permissions will not stick."
 fi
 
+# --- 4. Verify -------------------------------------------------------------
 info "Verifying the signature"
 if VERIFY_OUT=$(codesign --verify --strict --verbose=2 "$BUILT" 2>&1); then
   field "signature" "verifies"
@@ -140,12 +145,21 @@ else
   exit 1
 fi
 
-# --- 4. Install ------------------------------------------------------------
+# --- 5. Replace ------------------------------------------------------------
+# Only now, with a verified bundle in hand.
+if [ -e "$INSTALLED" ]; then
+  if [ -e "$INSTALLED/Aloud.app" ]; then
+    warn "Found a nested bundle at $INSTALLED/Aloud.app — that is the cp bug."
+  fi
+  info "Removing the existing $INSTALLED"
+  rm -rf "$INSTALLED" || die "Could not remove $INSTALLED"
+fi
+
 info "Installing to $INSTALLED"
 # ditto preserves symlinks and metadata, and never nests on an existing target.
 ditto "$BUILT" "$INSTALLED" || die "Could not copy the bundle into /Applications"
 
-# --- 5. Prove it works -----------------------------------------------------
+# --- 6. Prove it works -----------------------------------------------------
 info "Inspecting the installed bundle"
 PLIST="$INSTALLED/Contents/Info.plist"
 for key in CFBundleName CFBundleExecutable CFBundleIdentifier LSUIElement; do
@@ -155,6 +169,17 @@ done
 field "PyRuntimeLocations" "$(/usr/libexec/PlistBuddy -c 'Print :PyRuntimeLocations' "$PLIST" 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')"
 field "Contents/MacOS" "$(ls "$INSTALLED/Contents/MacOS" 2>/dev/null | tr '\n' ' ')"
 field "nested bundle?" "$([ -e "$INSTALLED/Aloud.app" ] && echo 'YES — still wrong' || echo 'no')"
+ICON=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$PLIST" 2>/dev/null || echo '')
+if [ -n "$ICON" ] && [ -e "$INSTALLED/Contents/Resources/${ICON%.icns}.icns" ]; then
+  field "icon" "$ICON"
+else
+  field "icon" "MISSING — macOS will fall back to the Python framework's icon"
+fi
+
+# macOS caches app icons hard, and this bundle has been replaced many times.
+# Without this the Dock and Finder keep showing whatever they cached first.
+touch "$INSTALLED"
+killall Dock >/dev/null 2>&1 || true
 
 info "Starting the bundle to check it runs"
 # stdout and stderr are kept apart on purpose. Libraries under faster-whisper

@@ -325,3 +325,23 @@ def test_install_prunes_broken_symlinks_before_signing():
     sign = script.index("--- 3. Sign")
     assert prune < sign, "pruning has to happen before signing, not after"
     assert "find \"$BUILT\" -type l" in script
+
+
+def test_install_never_removes_the_app_before_it_has_a_replacement():
+    """The old order removed /Applications/Aloud.app first, so any later
+    failure left the Mac with no app at all — a signature check that
+    correctly refused a bad bundle also uninstalled the working one."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    removal = script.index('rm -rf "$INSTALLED"')
+    for gate in ("info \"Building\"", "Verifying the signature", "codesign --force"):
+        assert script.index(gate) < removal, (
+            f"{gate!r} must run before the installed app is removed"
+        )
+
+
+def test_install_reports_a_missing_icon():
+    """No icon means macOS falls back to the Python framework's, which reads
+    as "this is not my app" rather than as a missing asset."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    assert "CFBundleIconFile" in script
+    assert "killall Dock" in script, "and bust the icon cache after replacing"
