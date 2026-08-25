@@ -7,8 +7,8 @@ apart silently.
 
 ``NSPrincipalClass`` is dropped: it tells ``NSApplicationMain`` which
 Objective-C class to instantiate, and only matters for a process that calls
-that C-level bootstrap directly. This bundle's executable is a trampoline
-that ``execv()``s straight into Python, which sets up ``NSApplication``
+that C-level bootstrap directly. This bundle's executable links Python in
+directly and calls ``Py_BytesMain()``, which sets up ``NSApplication``
 itself, in PyObjC, from ``aloud/app.py`` -- ``NSApplicationMain`` is never
 called, so the key would be inert at best.
 

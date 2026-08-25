@@ -15,15 +15,20 @@
 # executable's symlink at startup (a copy breaks that), and py2app's own
 # stub reads Contents/MacOS/python's path at launch and crashes if it is gone.
 #
-# So instead: Contents/MacOS/Aloud is a tiny compiled trampoline
-# (scripts/launcher.c) that execs a *complete, fully dereferenced copy* of
-# the working .venv, placed at Contents/Resources/venv. No symlinks anywhere
-# in the bundle -- nothing for codesign to object to -- and the interpreter
-# that ends up running is a real, ordinary venv, structurally identical to
-# the one `make run` already uses successfully, just living inside the
-# bundle instead of the checkout. See scripts/launcher.c for why this also
-# keeps the Dock icon and app identity correct, which a bare `execv` to an
-# *external* interpreter would not.
+# Contents/MacOS/Aloud is a small C program (scripts/launcher.c) linked
+# directly against this machine's Python and calling Py_BytesMain() -- the
+# same C-API function the standard `python` executable's own main() calls --
+# in-process. An earlier version of this launcher exec'd a copied
+# interpreter instead; that broke Accessibility for a subtler reason, found
+# only by testing on hardware: NSBundle.mainBundle() requires the *running*
+# executable's own path to sit exactly at Contents/MacOS/<CFBundleExecutable>,
+# and exec() replaces that path, so TCC ended up evaluating the wrong
+# identity entirely (see scripts/launcher.c for the full story). Calling
+# Py_BytesMain() in-process instead means this same binary keeps running for
+# the app's whole lifetime, so its bundle identity never changes. It also
+# means the .venv no longer needs to be copied into the bundle at all --
+# nothing here is a symlink pointing outside the bundle, so codesign has
+# nothing to object to either way.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -63,43 +68,42 @@ fi
 ./.venv/bin/python scripts/write_plist.py "$BUILT/Contents/Info.plist" \
   || die "Could not write Info.plist"
 
-# --- 2. Compile the launcher ---------------------------------------------
-# Finds its own path at runtime and execs Contents/Resources/venv/bin/python
-# -m aloud, forwarding every argument. See scripts/launcher.c for the reason
-# this exists instead of py2app's embedded-Python stub.
+# --- 2. Work out how to link against this machine's Python -----------------
+# Queried through .venv/bin/python3 itself, not assumed, so this adapts to
+# whatever Homebrew python@3.12 install actually exists on this Mac. Writes
+# build/aloud_embed_config.h (ALOUD_PYTHONHOME / ALOUD_PYTHONPATH, which the
+# launcher setenv()s before calling Py_BytesMain) and prints CFLAGS/LDFLAGS
+# for the compile step below. See scripts/python_embed_flags.py.
+info "Finding this machine's Python"
+mkdir -p build
+HEADER="build/aloud_embed_config.h"
+EMBEDERR="$(mktemp -t aloud-embed)"
+if ! EMBED_VARS=$(./.venv/bin/python3 scripts/python_embed_flags.py "$HEADER" 2>"$EMBEDERR"); then
+  printf '\033[1;31m==>\033[0m Could not work out how to link against Python:\n\n' >&2
+  sed 's/^/    /' "$EMBEDERR" >&2
+  rm -f "$EMBEDERR"
+  exit 1
+fi
+rm -f "$EMBEDERR"
+eval "$EMBED_VARS"
+field "PYTHONHOME" "$PY_HOME"
+field "PYTHONPATH" "$PY_PYTHONPATH"
+field "link flags" "$LDFLAGS"
+
+# --- 3. Compile the launcher, linked directly against Python --------------
+# Calls Py_BytesMain() in-process -- the same function `python`'s own main()
+# calls -- instead of exec-ing a separate interpreter. See scripts/launcher.c
+# for why that distinction is what actually makes Accessibility work.
 info "Compiling the launcher"
 CLANGERR="$(mktemp -t aloud-clang)"
-if ! clang -O2 -Wall -o "$BUILT/Contents/MacOS/Aloud" scripts/launcher.c 2>"$CLANGERR"; then
+# shellcheck disable=SC2086  # CFLAGS/LDFLAGS are meant to word-split.
+if ! clang -O2 -Wall -I build $CFLAGS -o "$BUILT/Contents/MacOS/Aloud" scripts/launcher.c $LDFLAGS 2>"$CLANGERR"; then
   printf '\033[1;31m==>\033[0m The launcher would not compile:\n\n' >&2
   sed 's/^/    /' "$CLANGERR" >&2
   rm -f "$CLANGERR"
   exit 1
 fi
 rm -f "$CLANGERR"
-
-# --- 3. Copy the venv, dereferencing every symlink -----------------------
-# `-L` is the whole point: `.venv/bin/python` is normally a symlink to
-# Homebrew's real interpreter, and py2app's alias build left it that way,
-# which is exactly what codesign refuses. `cp -L` follows it and copies the
-# real file instead, landing at the same relative name ("python") with the
-# real bytes -- so the copy is a complete, ordinary venv with no symlinks in
-# it, structurally identical to (and exactly as functional as) the one
-# `make run` already uses, just relocated. Its own pyvenv.cfg still points
-# at Homebrew for the standard library (an ordinary external file read at
-# runtime, not a symlink -- codesign has no opinion about that), and its own
-# site-packages -- MLX, faster-whisper, PyObjC, everything -- comes along in
-# the copy, so nothing is missing.
-info "Copying the virtualenv into the bundle (this takes a while)"
-COPYERR="$(mktemp -t aloud-venvcopy)"
-if ! cp -RL .venv "$BUILT/Contents/Resources/venv" 2>"$COPYERR"; then
-  printf '\033[1;31m==>\033[0m Could not copy the virtualenv:\n\n' >&2
-  sed 's/^/    /' "$COPYERR" >&2
-  rm -f "$COPYERR"
-  exit 1
-fi
-rm -f "$COPYERR"
-[ -x "$BUILT/Contents/Resources/venv/bin/python" ] \
-  || die "The copied venv has no working bin/python"
 
 # --- 4. Sign ---------------------------------------------------------------
 # Prefer a stable identity over ad-hoc. Ad-hoc signing derives the app's code
@@ -108,15 +112,12 @@ rm -f "$COPYERR"
 # applying -- while still showing as enabled in System Settings, which is what
 # makes it so hard to diagnose. scripts/make_signing_cert.sh creates one.
 #
-# Both the launcher AND the copied interpreter are signed with this identity.
-# The launcher execs the interpreter, replacing its own process image with
-# it -- so whichever binary is actually running when Aloud calls
-# CGEventTapCreate is the one TCC evaluates, and that is the copied python,
-# not the launcher. Leaving the interpreter with Homebrew's own original
-# signature would mean the Accessibility grant has to attach to *that*
-# identity instead, unpredictably.
+# Only Contents/MacOS/Aloud itself needs signing now -- it calls
+# Py_BytesMain() in-process rather than exec-ing a separate interpreter
+# binary, so it is the only Mach-O executable in the bundle, and it is the
+# one running the whole time Aloud calls CGEventTapCreate.
 #
-# No --options runtime (no hardened runtime) on either: MLX, faster-whisper
+# No --options runtime (no hardened runtime): MLX, faster-whisper
 # and PyObjC's native extensions were never built expecting library
 # validation or JIT-memory restrictions, and hardened runtime is what made
 # the old py2app stub need allow-jit/allow-unsigned-executable-memory
@@ -163,20 +164,11 @@ sign_one() {
   return 1
 }
 
-# The copied interpreter first: it is a nested Mach-O binary that signing
-# the bundle below (no --deep) will not touch on its own, and it is the one
-# that matters -- the launcher execs it, replacing its own process image, so
-# whichever binary is actually running when Aloud calls CGEventTapCreate is
-# this one, not the launcher. Leaving it with Homebrew's original signature
-# would mean the Accessibility grant has to attach to *that* identity
-# instead, unpredictably.
-#
-# Then the bundle itself, which signs Contents/MacOS/Aloud (the main
-# executable) and seals the resource envelope -- Info.plist, the icon, and
-# the already-signed interpreter, hashed in as ordinary resource data -- in
-# one standard operation.
-if ! sign_one "the copied interpreter" "$BUILT/Contents/Resources/venv/bin/python" \
-   || ! sign_one "the bundle" "$BUILT"; then
+# Signs Contents/MacOS/Aloud (the main executable) and seals the resource
+# envelope -- Info.plist and the icon -- in one standard operation. There is
+# no separate nested binary to sign first: Python is linked in, not copied
+# in as its own Mach-O file.
+if ! sign_one "the bundle" "$BUILT"; then
   if [ "$IDENTITY" != "-" ]; then
     printf '\n    The identity "%s" is listed but codesign will not use it.\n' "$IDENTITY_LABEL" >&2
     printf '    Usually the certificate is not trusted for code signing yet:\n\n' >&2

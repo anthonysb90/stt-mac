@@ -372,11 +372,12 @@ def test_install_builds_no_symlinks_at_all():
     bundle -- codesign refuses to seal them, and neither copying nor
     deleting the specific offenders (Contents/MacOS/python,
     Contents/Frameworks/Python.framework) left a working app. The
-    hand-assembled bundle sidesteps this instead of fighting it: the venv is
-    copied with `cp -RL`, which dereferences every symlink it walks, so
-    there is nothing left for codesign to object to."""
+    hand-assembled bundle sidesteps this instead of fighting it: Python is
+    linked directly into Contents/MacOS/Aloud rather than being present in
+    the bundle as its own file (copied or symlinked) at all, so there is
+    nothing left for codesign to object to."""
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
-    assert "cp -RL .venv" in script, "-L dereferences symlinks during the copy"
+    assert "cp -RL .venv" not in script, "nothing is copied into the bundle anymore"
     assert "flatten_bundle.py" not in script, (
         "no bundle-internal symlinks are created in the first place, so "
         "there is nothing left to flatten"
@@ -460,49 +461,127 @@ def test_write_plist_reads_setup_py_as_the_single_source_of_truth():
     assert "module.PLIST" in script
 
 
+def _c_code_without_comments(text: str) -> str:
+    """Strip /* ... */ blocks (the only comment style launcher.c uses) so a
+    check for "is this actually called" isn't fooled by prose that mentions
+    the old approach by name to explain why it was replaced."""
+    import re
+
+    return re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+
+
 def test_launcher_forwards_argv_to_python_dash_m_aloud():
     """`make tap-test`/`--version`/`doctor` all invoke the installed binary
     with arguments; the trampoline has to pass them through unchanged."""
     source = (SRC.parent.parent / "scripts" / "launcher.c").read_text()
     assert '"-m"' in source and '"aloud"' in source
-    assert "execv(" in source
-    assert "_NSGetExecutablePath" in source, "must locate itself, not assume a fixed path"
+    assert "Py_BytesMain(" in source
 
 
-def test_launcher_execs_the_bundled_copy_not_an_external_interpreter():
-    """Exec-ing an external interpreter (Homebrew, or the checkout's venv
-    directly) would leave the running process with no bundle association at
-    all -- the same reason a bare `python -m aloud run` shows a generic
-    icon instead of Aloud's. The target must be inside the bundle."""
+def test_launcher_calls_py_bytesmain_in_process_not_execv():
+    """execv() replaces the running process's own binary -- proven on
+    hardware to break NSBundle.mainBundle()'s bundle discovery, which
+    requires the *running* executable to sit exactly at
+    Contents/MacOS/<CFBundleExecutable>. Py_BytesMain() runs in-process, so
+    this binary never stops being the one macOS sees."""
     source = (SRC.parent.parent / "scripts" / "launcher.c").read_text()
-    assert "Resources/venv/bin/python" in source
-    assert "/opt/homebrew" not in source, "no hardcoded external path"
-    assert "getenv" not in source or "REPO_ROOT" not in source
+    code = _c_code_without_comments(source)
+    assert "execv(" not in code
+    assert "#include <Python.h>" in source
+    assert "PYTHONHOME" in source and "PYTHONPATH" in source
+    assert "setenv(" in code, "must set them before Py_BytesMain reads them"
 
 
-def test_install_compiles_the_launcher_and_copies_the_venv():
+def test_launcher_gets_its_paths_from_the_generated_header_not_hardcoded():
+    """The paths depend on whatever Homebrew install and checkout location
+    exist on this specific machine -- scripts/python_embed_flags.py works
+    them out at build time; the launcher itself must not guess."""
+    source = (SRC.parent.parent / "scripts" / "launcher.c").read_text()
+    code = _c_code_without_comments(source)
+    assert '#include "aloud_embed_config.h"' in source
+    assert "ALOUD_PYTHONHOME" in source and "ALOUD_PYTHONPATH" in source
+    assert "/opt/homebrew" not in code, "no hardcoded external path"
+    assert "Resources/venv" not in code, "no copied venv to find anymore"
+
+
+def test_python_embed_flags_writes_a_working_header(tmp_path):
+    """Runnable on Linux -- it is pure sysconfig, no macOS dependency -- so
+    this is real coverage of the fallback (non-framework) path, not just a
+    string check on a shell script."""
+    import subprocess
+    import sys
+
+    script = SRC.parent.parent / "scripts" / "python_embed_flags.py"
+    header = tmp_path / "aloud_embed_config.h"
+    result = subprocess.run(
+        [sys.executable, str(script), str(header)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert header.exists()
+
+    contents = header.read_text(encoding="utf-8")
+    assert "#define ALOUD_PYTHONHOME" in contents
+    assert "#define ALOUD_PYTHONPATH" in contents
+
+    assert "CFLAGS=" in result.stdout
+    assert "LDFLAGS=" in result.stdout
+    assert "PY_HOME=" in result.stdout
+    assert "PY_PYTHONPATH=" in result.stdout
+
+
+def test_python_embed_flags_pythonpath_includes_purelib_and_src(tmp_path):
+    """The purelib directory carries the third-party deps (MLX,
+    faster-whisper, PyObjC on the real machine); src/ is included explicitly
+    rather than relying on the venv's editable install of `aloud`, because
+    .pth-file processing only happens for directories site.py treats as site
+    directories, and a hand-set PYTHONPATH entry is not one."""
+    import subprocess
+    import sys
+    import sysconfig
+
+    script = SRC.parent.parent / "scripts" / "python_embed_flags.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(tmp_path / "embed.h")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert sysconfig.get_path("purelib") in result.stdout
+    assert str(SRC.parent) in result.stdout, "src/ must be on PYTHONPATH"
+
+
+def test_install_compiles_the_launcher_against_python_directly():
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
     assert "clang" in script
     assert "launcher.c" in script
     assert 'command -v clang' in script, "fail with a clear message, not a cryptic one"
-    copy = script.index("cp -RL .venv")
+    assert "cp -RL .venv" not in script, "no venv copy -- Python is linked in, not copied in"
+    embed = script.index("python_embed_flags.py")
     compile_step = script.index("clang -O2")
     sign = script.index("sign_one")
-    assert compile_step < sign and copy < sign, "build everything before signing it"
+    assert embed < compile_step < sign, "work out the link flags, then build, then sign"
 
 
-def test_install_signs_the_copied_interpreter_not_just_the_launcher():
-    """TCC evaluates whichever binary is actually running when Aloud calls
-    CGEventTapCreate. The launcher execs the copied interpreter, replacing
-    its own process image -- so that interpreter, not the launcher, is what
-    the Accessibility grant has to attach to."""
+def test_install_signs_only_the_bundle():
+    """There is no separate interpreter binary anymore -- Contents/MacOS/Aloud
+    is the only Mach-O executable in the bundle, since Python is linked in
+    rather than copied in as its own file."""
     script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
-    interpreter_sign = script.index('sign_one "the copied interpreter"')
-    bundle_sign = script.index('sign_one "the bundle"')
-    assert interpreter_sign < bundle_sign, (
-        "the nested binary must be signed before the outer bundle seal, "
-        "which does not touch nested code without --deep"
+    assert 'sign_one "the copied interpreter"' not in script
+    assert script.count("sign_one(") == 1, "sign_one is defined once"
+    assert 'sign_one "the bundle"' in script
+
+
+def test_install_uses_the_embed_flags_when_compiling():
+    """The link flags come from this machine's actual Python install, not a
+    guess -- if the compile step stops using them, a Homebrew upgrade or a
+    different Mac silently breaks the build instead of failing loudly."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    compile_line = next(
+        line for line in script.splitlines() if line.strip().startswith("if ! clang -O2")
     )
+    assert "$CFLAGS" in compile_line
+    assert "$LDFLAGS" in compile_line
+    assert "-I build" in compile_line, "so #include \"aloud_embed_config.h\" resolves"
 
 
 def test_install_skips_hardened_runtime():

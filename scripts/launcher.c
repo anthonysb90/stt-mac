@@ -1,106 +1,69 @@
 /*
- * scripts/launcher.c -> compiled to Contents/MacOS/Aloud
+ * scripts/launcher.c -> compiled to Contents/MacOS/Aloud, linked directly
+ * against Python and calling Py_BytesMain() in-process.
  *
- * The whole job: find this binary's own path, derive the bundled venv's
- * python from it, and execv() straight into `python -m aloud <args>`.
+ * The previous design here exec'd Contents/Resources/venv/bin/python. That
+ * broke Accessibility in a way that was only found by direct testing on
+ * hardware: NSBundle.mainBundle() requires the *running* executable's own
+ * path to sit exactly at Contents/MacOS/<CFBundleExecutable>, not merely
+ * somewhere inside the .app. execv() replaces the process image -- the
+ * running binary becomes .../Contents/Resources/venv/bin/python, which
+ * fails that check, so NSBundle fell back to an unrelated bundle (Homebrew's
+ * own internal Python.framework helper app). TCC evaluates whichever binary
+ * is actually running when CGEventTapCreate is called, using *that*
+ * process's own reported identity -- so no Accessibility grant made for
+ * "Aloud" could ever apply to it, no matter what System Settings showed.
  *
- * Why a trampoline instead of embedding Python (the old py2app approach):
- * py2app's alias build symlinks Contents/Frameworks/Python.framework and
- * Contents/MacOS/python back out to the checkout and to Homebrew. codesign
- * refuses any symlink whose destination leaves the bundle ("invalid
- * destination for symbolic link in bundle"), so that bundle can never
- * verify -- and macOS will not hold an Accessibility grant against a
- * signature that does not verify, confirmed directly on hardware, not just
- * theorized. Neither copying nor deleting those specific symlinks works:
- * CPython finds its standard library by resolving its own executable's
- * symlink at startup, so a copy (no longer a symlink) breaks that lookup,
- * and py2app's own stub reads that path at launch and crashes if it is
- * simply gone.
+ * Py_BytesMain() -- https://docs.python.org/3/c-api/veryhigh.html#c.Py_BytesMain
+ * -- is the exact function the standard `python` executable's own main()
+ * calls. Linking against it directly and calling it here means this
+ * process's own binary never changes: it stays Contents/MacOS/Aloud for the
+ * app's entire lifetime, so NSBundle.mainBundle() finds the real bundle
+ * (this one) and TCC evaluates the right identity.
  *
- * This sidesteps the whole problem: install_app.sh copies the entire
- * .venv into Contents/Resources/venv, dereferencing every symlink along
- * the way (`cp -RL`), so the copy is a complete, ordinary venv -- no
- * symlinks anywhere, nothing for codesign to object to. This launcher's
- * only job is to exec that copy.
- *
- * The running process becomes that copied python (re-signed with this same
- * identity -- see install_app.sh), so the Accessibility grant attaches to
- * it directly. Its path stays inside Aloud.app the whole time, so
- * NSBundle.mainBundle() still finds this bundle's Info.plist and icon --
- * unlike exec-ing an external interpreter, which would leave the running
- * process with no bundle association at all (the same reason a bare
- * `python -m aloud run` shows a generic icon instead of Aloud's).
+ * This also means the .venv no longer needs to be copied into the bundle
+ * (the previous design's `cp -RL .venv`, dereferencing every symlink so
+ * codesign had nothing bundle-internal to object to). That copy existed to
+ * avoid a symlink *inside the bundle*; dynamically linking against an
+ * external framework isn't a bundle-internal symlink at all -- codesign's
+ * "invalid destination for symbolic link in bundle" rule never applied to
+ * it in the first place. ALOUD_PYTHONHOME and ALOUD_PYTHONPATH (in the
+ * generated build/aloud_embed_config.h -- see scripts/python_embed_flags.py)
+ * point at Homebrew's real install and this checkout's venv/src directly,
+ * read as ordinary environment variables at runtime -- invisible to
+ * codesign, same as pyvenv.cfg pointing outward already was.
  */
 
-#include <errno.h>
-#include <limits.h>
-#include <mach-o/dyld.h>
+#include <Python.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 
-static void die(const char *what) {
-    fprintf(stderr, "Aloud: %s: %s\n", what, strerror(errno));
-    exit(1);
-}
+#include "aloud_embed_config.h"
 
 int main(int argc, char *argv[]) {
-    char self_path[PATH_MAX];
-    uint32_t size = sizeof(self_path);
-    if (_NSGetExecutablePath(self_path, &size) != 0) {
-        fprintf(stderr, "Aloud: could not determine my own path (buffer too small)\n");
+    if (setenv("PYTHONHOME", ALOUD_PYTHONHOME, 1) != 0
+        || setenv("PYTHONPATH", ALOUD_PYTHONPATH, 1) != 0
+        || setenv("PYTHONUTF8", "1", 1) != 0) {
+        fprintf(stderr, "Aloud: could not set up the Python environment\n");
         return 1;
     }
 
-    char resolved[PATH_MAX];
-    if (realpath(self_path, resolved) == NULL) {
-        die("resolving my own path");
-    }
-
-    /* resolved == ".../Aloud.app/Contents/MacOS/Aloud" --
-       strip "/MacOS/Aloud" off the end, in two steps, to land on Contents/. */
-    char *last_slash = strrchr(resolved, '/');
-    if (last_slash == NULL) {
-        fprintf(stderr, "Aloud: unexpected path: %s\n", resolved);
-        return 1;
-    }
-    *last_slash = '\0'; /* ".../Aloud.app/Contents/MacOS" */
-
-    last_slash = strrchr(resolved, '/');
-    if (last_slash == NULL) {
-        fprintf(stderr, "Aloud: unexpected path: %s\n", resolved);
-        return 1;
-    }
-    *last_slash = '\0'; /* ".../Aloud.app/Contents" */
-
-    char python_path[PATH_MAX];
-    int n = snprintf(python_path, sizeof(python_path), "%s/Resources/venv/bin/python", resolved);
-    if (n < 0 || (size_t)n >= sizeof(python_path)) {
-        fprintf(stderr, "Aloud: bundle path too long\n");
-        return 1;
-    }
-
-    if (access(python_path, X_OK) != 0) {
-        fprintf(stderr, "Aloud: no interpreter at %s: %s\n", python_path, strerror(errno));
-        return 1;
-    }
-
-    /* new argv: python, -m, aloud, <forwarded args from argv[1..]>, NULL */
-    char **new_argv = malloc(sizeof(char *) * (size_t)(argc + 3));
+    /* new argv: argv[0], -m, aloud, <forwarded args from argv[1..]>, NULL --
+       identical to `python -m aloud <args>`, which is exactly what `make
+       run` already invokes successfully. */
+    int new_argc = argc + 2;
+    char **new_argv = malloc(sizeof(char *) * (size_t)(new_argc + 1));
     if (new_argv == NULL) {
-        die("allocating argv");
+        fprintf(stderr, "Aloud: out of memory\n");
+        return 1;
     }
-    new_argv[0] = python_path;
+    new_argv[0] = argv[0];
     new_argv[1] = "-m";
     new_argv[2] = "aloud";
     for (int i = 1; i < argc; i++) {
         new_argv[2 + i] = argv[i];
     }
-    new_argv[argc + 2] = NULL;
+    new_argv[new_argc] = NULL;
 
-    execv(python_path, new_argv);
-    /* execv only returns on failure */
-    die("exec failed");
-    return 1;
+    return Py_BytesMain(new_argc, new_argv);
 }
