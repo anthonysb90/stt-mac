@@ -151,6 +151,16 @@ class AloudDelegate(Foundation.NSObject):
     # callbacks and menu actions below are meant to be selectors.
 
     @objc.python_method
+    def on_accessibility_granted(self) -> None:
+        """Rebuild the hotkey now that the grant exists, without a restart."""
+        def reinstall() -> None:
+            self.controller.install_hotkey()
+            self._hotkey_changed()
+            log.info("Hotkey reinstalled after Accessibility was granted")
+
+        run_on_main(reinstall)
+
+    @objc.python_method
     def on_state(self, state: State) -> None:
         run_on_main(lambda: self._apply_state(state))
 

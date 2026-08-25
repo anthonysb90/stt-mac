@@ -502,3 +502,104 @@ def test_file_conversion_runs_on_the_worker_not_the_caller(app, tmp_path, monkey
     assert calls == [], "queueing must not convert"
     app._drain_one_for_test(app._jobs.get())
     assert calls == [source], "the worker converts"
+
+
+# -- granting Accessibility while the app runs ------------------------------
+
+
+def test_the_hotkey_is_rebuilt_when_accessibility_arrives(app, monkeypatch):
+    """The tap must exist before the grant does, and a tap built untrusted is
+    deaf to other apps for the life of the process. Granting used to require
+    quitting and reopening -- something to know rather than to notice."""
+    from aloud import permissions
+
+    trusted = {"value": False}
+    monkeypatch.setattr(
+        permissions, "accessibility_trusted", lambda prompt=False: trusted["value"]
+    )
+    app.ACCESSIBILITY_POLL_SECONDS = 0.01
+
+    class Watcher:
+        def __init__(self):
+            self.granted = 0
+
+        def on_accessibility_granted(self):
+            self.granted += 1
+
+    watcher = Watcher()
+    app.add_observer(watcher)
+    app._watch_for_accessibility()
+
+    import time as _time
+
+    trusted["value"] = True
+    for _ in range(200):
+        if watcher.granted:
+            break
+        _time.sleep(0.01)
+
+    assert watcher.granted == 1, "the grant arriving must rebuild the hotkey"
+    app.shutdown()
+
+
+def test_no_watcher_runs_when_access_is_already_granted(app, monkeypatch):
+    """Nothing to wait for; do not leave a thread polling forever."""
+    import threading
+
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "accessibility_trusted", lambda prompt=False: True)
+    before = {t.name for t in threading.enumerate()}
+    app._watch_for_accessibility()
+    after = {t.name for t in threading.enumerate()}
+    assert "aloud-permissions" not in (after - before)
+
+
+def test_shutdown_stops_the_permission_watcher(app, monkeypatch):
+    import threading
+    import time as _time
+
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "accessibility_trusted", lambda prompt=False: False)
+    app.ACCESSIBILITY_POLL_SECONDS = 0.01
+    app._watch_for_accessibility()
+    app.shutdown()
+
+    for _ in range(200):
+        if not any(t.name == "aloud-permissions" for t in threading.enumerate()):
+            return
+        _time.sleep(0.01)
+    raise AssertionError("the watcher thread outlived shutdown")
+
+
+def test_the_app_reinstalls_the_hotkey_on_the_main_thread():
+    """CFRunLoop sources attach to the thread that adds them."""
+    import ast
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parent.parent / "src" / "aloud" / "app.py"
+    ).read_text(encoding="utf-8")
+    node = next(
+        n for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.FunctionDef) and n.name == "on_accessibility_granted"
+    )
+    body = ast.unparse(node)
+    assert "run_on_main" in body
+    assert "install_hotkey" in body
+
+
+def test_start_arms_the_permission_watcher():
+    """Testing the watcher directly proves nothing if start() never calls it."""
+    import ast
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parent.parent / "src" / "aloud" / "core.py"
+    ).read_text(encoding="utf-8")
+    node = next(
+        n for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.FunctionDef) and n.name == "start"
+    )
+    assert "_watch_for_accessibility" in ast.unparse(node)

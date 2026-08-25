@@ -122,6 +122,11 @@ _STOP = object()
 class DictationController:
     """Owns the pipeline, the state machine, and the dictionary."""
 
+    #: How often to re-check whether Accessibility has been granted, while it
+    #: has not been. Seconds. Frequent enough to feel immediate when someone
+    #: flips the switch and comes back, cheap enough not to matter.
+    ACCESSIBILITY_POLL_SECONDS = 2.0
+
     def __init__(self, config: Config, dictionary: Optional[Dictionary] = None) -> None:
         self.config = config
         self.state = State.IDLE
@@ -150,6 +155,7 @@ class DictationController:
         self._max_duration_timer: Optional[threading.Timer] = None
         self._last: Optional[Dictation] = None
         self._cancel_current = threading.Event()
+        self._stopping = threading.Event()
 
     # -- observers ---------------------------------------------------------
 
@@ -180,15 +186,46 @@ class DictationController:
             )
             self._worker.start()
         self.install_hotkey()
+        self._watch_for_accessibility()
         threading.Thread(target=self.engine.warm_up, daemon=True).start()
 
     def shutdown(self) -> None:
+        self._stopping.set()
         self._disarm_max_duration()
         self.recorder.cancel()
         if self.listener is not None:
             self.listener.uninstall()
             self.listener = None
         self._jobs.put(_STOP)
+
+    def _watch_for_accessibility(self) -> None:
+        """Reinstall the hotkey the moment Accessibility is granted.
+
+        The tap has to exist before the grant does -- the app starts listening
+        at launch -- and a tap built while untrusted stays deaf to other apps
+        for the life of the process. Until now that meant granting access did
+        nothing visible and the only cure was quitting and reopening, which is
+        a thing to know rather than a thing to notice.
+
+        So: poll the trust flag, and rebuild the tap when it flips. The check
+        is a cheap local lookup, and the thread stops the moment it succeeds.
+        """
+        from .permissions import accessibility_trusted
+
+        if accessibility_trusted():
+            return
+
+        def watch() -> None:
+            while not self._stopping.is_set():
+                if self._stopping.wait(self.ACCESSIBILITY_POLL_SECONDS):
+                    return
+                if not accessibility_trusted():
+                    continue
+                log.info("Accessibility granted; reinstalling the hotkey")
+                self._emit("on_accessibility_granted")
+                return
+
+        threading.Thread(target=watch, name="aloud-permissions", daemon=True).start()
 
     def install_hotkey(self) -> None:
         """(Re)install the global hotkey from the current config."""

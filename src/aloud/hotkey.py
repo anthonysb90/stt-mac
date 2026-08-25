@@ -112,7 +112,24 @@ class HotkeyListener:
     # -- lifecycle ---------------------------------------------------------
 
     def install(self, runloop=None) -> None:
-        """Create the tap and attach it to a run loop. Call on the main thread."""
+        """Create the tap and attach it to a run loop. Call on the main thread.
+
+        Checks Accessibility first, and refuses rather than proceeding. An
+        untrusted process does not get NULL back from CGEventTapCreate -- it
+        gets a tap that only ever sees events aimed at the app itself. That is
+        indistinguishable from success at install time and produces the one
+        symptom nobody can act on: the hotkey works while Aloud is focused and
+        is dead in every other app, which is the opposite of the point.
+        """
+        from .permissions import accessibility_trusted
+
+        if not accessibility_trusted():
+            raise HotkeyError(
+                "Accessibility access has not been granted to this build, so "
+                "the hotkey can only see events inside Aloud itself. Grant it "
+                "under System Settings > Privacy & Security > Accessibility."
+            )
+
         mask = Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
         self._tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap,

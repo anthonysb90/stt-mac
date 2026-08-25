@@ -126,3 +126,28 @@ def test_left_and_right_device_bits_are_disjoint():
 def test_fn_still_uses_the_public_mask():
     listener, _ = _listener("hold", key="fn")
     assert listener._mask == MODIFIER_KEYS["fn"][1]
+
+
+# -- an untrusted tap is worse than no tap ----------------------------------
+
+
+def test_install_refuses_without_accessibility(monkeypatch):
+    """CGEventTapCreate succeeds when untrusted -- it just returns a tap that
+    only sees Aloud's own events. That is the "works in Aloud, dead in every
+    other app" symptom, and it looks exactly like success at install time."""
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "accessibility_trusted", lambda prompt=False: False)
+    listener, _ = _listener("hold")
+    with pytest.raises(HotkeyError, match="Accessibility"):
+        listener.install()
+
+
+def test_install_proceeds_once_trusted(monkeypatch):
+    from aloud import permissions
+
+    monkeypatch.setattr(permissions, "accessibility_trusted", lambda prompt=False: True)
+    listener, _ = _listener("hold")
+    listener.install(runloop=object())
+    assert listener._tap is not None
+    listener.uninstall()
