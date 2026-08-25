@@ -284,3 +284,20 @@ def test_the_cert_script_tests_signing_rather_than_trusting_the_listing():
     assert "can_sign()" in script
     assert "repair_trust()" in script
     assert "--repair" in script, "and offer a way to fix an existing one"
+
+
+def test_signing_resolves_the_identity_to_a_hash():
+    """Two certificates sharing a name make codesign refuse outright:
+
+        Aloud Dev: ambiguous (matches "Aloud Dev" and "Aloud Dev")
+
+    Re-running a script that creates one is all it takes to get two, so the
+    name is never used as the signing argument. A hash cannot be ambiguous.
+    """
+    install = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    assert "awk '{print $2}'" in install, "resolve the name to a hash"
+    assert "ambiguous" in install, "and say why, where the next reader will look"
+
+    cert = (SRC.parent.parent / "scripts" / "make_signing_cert.sh").read_text()
+    assert "identity_hashes()" in cert
+    assert "forget_duplicates()" in cert, "and clear duplicates rather than pick"

@@ -49,17 +49,31 @@ rm -rf build dist
 # applying -- while still showing as enabled in System Settings, which is what
 # makes it so hard to diagnose. scripts/make_signing_cert.sh creates one.
 IDENTITY="${CODESIGN_IDENTITY:-}"
+IDENTITY_LABEL="$IDENTITY"
 if [ -z "$IDENTITY" ]; then
   for candidate in "Aloud Dev"; do
-    if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$candidate"; then
-      IDENTITY="$candidate"
+    # By hash, not by name. Two certificates sharing a name make codesign
+    # refuse with "ambiguous (matches ... and ...)", and re-running a script
+    # that creates one is all it takes to end up with two. A hash cannot be
+    # ambiguous. ./scripts/make_signing_cert.sh clears duplicates.
+    hashes="$(security find-identity -v -p codesigning 2>/dev/null \
+      | grep -F "\"$candidate\"" | awk '{print $2}')"
+    count="$(printf '%s' "$hashes" | grep -c . || true)"
+    if [ "${count:-0}" -gt 1 ]; then
+      warn "$count certificates are called '$candidate'; using the first."
+      warn "Run ./scripts/make_signing_cert.sh to clear the duplicates."
+    fi
+    if [ -n "$hashes" ]; then
+      IDENTITY="$(printf '%s\n' "$hashes" | head -1)"
+      IDENTITY_LABEL="$candidate"
       info "Found a stable signing identity: $candidate"
       break
     fi
   done
 fi
 : "${IDENTITY:=-}"
-info "Signing as: $IDENTITY"
+: "${IDENTITY_LABEL:=$IDENTITY}"
+info "Signing as: $IDENTITY_LABEL"
 SIGNERR="$(mktemp -t aloud-codesign)"
 if codesign --force --deep --options runtime \
     --entitlements scripts/entitlements.plist \
@@ -75,7 +89,7 @@ else
   sed 's/^/    /' "$SIGNERR" >&2
   rm -f "$SIGNERR"
   if [ "$IDENTITY" != "-" ]; then
-    printf '\n    The identity "%s" is listed but codesign will not use it.\n' "$IDENTITY" >&2
+    printf '\n    The identity "%s" is listed but codesign will not use it.\n' "$IDENTITY_LABEL" >&2
     printf '    Usually the certificate is not trusted for code signing yet:\n\n' >&2
     printf '        ./scripts/make_signing_cert.sh --repair\n\n' >&2
     printf '    Signing ad-hoc instead would leave you exactly where you started,\n' >&2

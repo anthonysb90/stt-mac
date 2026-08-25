@@ -39,16 +39,56 @@ die()   { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
 # lists perfectly well and then fails to build a chain. Believing the listing
 # is what let a broken identity reach `make install`, where it fell back to
 # ad-hoc and undid the entire point.
+# Every SHA-1 hash currently listed for $NAME. More than one means duplicates,
+# which is fatal in a way the error message does not make obvious:
+#
+#     Aloud Dev: ambiguous (matches "Aloud Dev" and "Aloud Dev")
+#
+# codesign refuses to choose, so a name that looks perfectly present stops
+# working. Re-running a script that creates a certificate is how you get two.
+identity_hashes() {
+  security find-identity -v -p codesigning 2>/dev/null \
+    | grep -F "\"$NAME\"" \
+    | awk '{print $2}'
+}
+
+# Sign by hash, never by name: a hash cannot be ambiguous.
 can_sign() {
-  local probe
+  local probe status hash
+  hash="$(identity_hashes | head -1)"
+  if [ -z "$hash" ]; then
+    LAST_SIGN_ERROR="no code-signing identity named '$NAME'"
+    return 1
+  fi
   probe="$(mktemp -t aloud-probe)"
   printf '#!/bin/sh\nexit 0\n' >"$probe"
   chmod +x "$probe"
-  codesign --force --sign "$NAME" "$probe" 2>"$probe.err"
-  local status=$?
-  [ $status -ne 0 ] && LAST_SIGN_ERROR="$(cat "$probe.err")"
+  codesign --force --sign "$hash" "$probe" 2>"$probe.err"
+  status=$?
+  if [ $status -ne 0 ]; then
+    LAST_SIGN_ERROR="$(cat "$probe.err")"
+    [ -z "$LAST_SIGN_ERROR" ] && LAST_SIGN_ERROR="codesign exited $status with no message"
+  fi
   rm -f "$probe" "$probe.err"
   return $status
+}
+
+# Remove every certificate and key called $NAME, so the next one is the only
+# one. Deleting is safe: it is self-signed, used for nothing but this app, and
+# recreated immediately below.
+forget_duplicates() {
+  local removed=0
+  while security find-certificate -c "$NAME" >/dev/null 2>&1; do
+    if security delete-identity -c "$NAME" >/dev/null 2>&1 \
+       || security delete-certificate -c "$NAME" >/dev/null 2>&1; then
+      removed=$((removed + 1))
+      [ "$removed" -gt 20 ] && break
+    else
+      break
+    fi
+  done
+  [ "$removed" -gt 0 ] && info "Removed $removed old '$NAME' certificate(s)."
+  return 0
 }
 
 # Re-apply the code-signing trust setting to a certificate already in the
@@ -69,7 +109,18 @@ repair_trust() {
 }
 
 LAST_SIGN_ERROR=""
-if security find-identity -v -p codesigning | grep -qF "$NAME"; then
+
+# Duplicates first: no amount of repairing trust fixes an ambiguous name, and
+# every other check below would keep reporting a different symptom.
+COUNT="$(identity_hashes | wc -l | tr -d ' ')"
+if [ "${COUNT:-0}" -gt 1 ]; then
+  warn "There are $COUNT certificates called '$NAME'."
+  warn "codesign refuses an ambiguous name, so all of them are unusable."
+  forget_duplicates
+  COUNT=0
+fi
+
+if [ "${COUNT:-0}" -ge 1 ]; then
   if [ "$REPAIR" = "0" ] && can_sign; then
     info "'$NAME' is present and codesign accepts it. Nothing to do."
     info "Build with it:  make install"
