@@ -576,3 +576,120 @@ def test_faster_whisper_clears_its_error_on_retry_too():
     assert "self._load_error = ''" in ast.unparse(load), (
         "a stale _load_error makes check() refuse forever; clear it per attempt"
     )
+
+
+# -- every MLX touch on one thread ------------------------------------------
+
+
+def test_mlx_thread_runs_work_on_a_single_thread():
+    """MLX binds its streams to the thread that first touches it.
+
+    Warm-up runs on a startup thread and transcription on the job worker, so
+    without this the second one hits "There is no Stream(cpu, 1) in current
+    thread". Both must land on the same thread.
+    """
+    import threading
+
+    worker = pk_module._MLXThread()
+    seen = []
+
+    def record():
+        seen.append(threading.current_thread().ident)
+
+    threads = [
+        threading.Thread(target=lambda: worker.call(record)) for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(seen) == 4
+    assert len(set(seen)) == 1, "all work must land on one thread"
+    assert seen[0] != threading.current_thread().ident, "and not the caller's"
+
+
+def test_mlx_thread_returns_values_and_re_raises_errors():
+    worker = pk_module._MLXThread()
+    assert worker.call(lambda a, b: a + b, 2, b=3) == 5
+
+    class Boom(RuntimeError):
+        pass
+
+    def explode():
+        raise Boom("from the MLX thread")
+
+    with pytest.raises(Boom, match="from the MLX thread"):
+        worker.call(explode)
+
+
+def test_mlx_thread_runs_inline_when_already_on_it():
+    """Routed methods call each other; re-queueing would deadlock."""
+    worker = pk_module._MLXThread()
+
+    def outer():
+        return worker.call(lambda: "inner ran")
+
+    assert worker.call(outer) == "inner ran"
+
+
+def test_warm_up_and_transcribe_share_the_mlx_thread(hub, tmp_path, monkeypatch):
+    """The real bug: two entry points, two threads, one angry scheduler."""
+    import threading
+
+    monkeypatch.setattr(pk_module, "supported", lambda: True)
+    monkeypatch.setattr(pk_module.importlib.util, "find_spec", lambda _n: object())
+    from aloud import media
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: "/opt/homebrew/bin/ffmpeg")
+    hub(_CacheAwareHub(cached=str(tmp_path)))
+
+    threads = []
+
+    class _Recording:
+        def transcribe(self, _path):
+            threads.append(("transcribe", threading.current_thread().ident))
+            return type("R", (), {"text": "hi"})
+
+    import sys, types
+
+    fake = types.ModuleType("parakeet_mlx")
+
+    def from_pretrained(_source):
+        threads.append(("load", threading.current_thread().ident))
+        return _Recording()
+
+    fake.from_pretrained = from_pretrained
+    monkeypatch.setitem(sys.modules, "parakeet_mlx", fake)
+
+    engine = pk_module.ParakeetMLXEngine()
+    # Warm up from one thread, transcribe from another, as the app does.
+    warm = threading.Thread(target=engine.warm_up)
+    warm.start()
+    warm.join(timeout=5)
+
+    wav = tmp_path / "clip.wav"
+    _write_wav(wav, seconds=1.0)
+    result = []
+    worker = threading.Thread(target=lambda: result.append(engine.transcribe(wav)))
+    worker.start()
+    worker.join(timeout=5)
+
+    assert result and result[0].text == "hi"
+    idents = {ident for _stage, ident in threads}
+    assert len(threads) == 2, f"expected a load and a transcribe, got {threads}"
+    assert len(idents) == 1, "the model must load and run on the same thread"
+
+
+def test_transcribe_is_routed_through_the_mlx_thread():
+    """A direct call would put MLX back on whichever thread happened to call."""
+    import ast
+    from pathlib import Path
+
+    source = Path(pk_module.__file__).with_suffix(".py").read_text(encoding="utf-8")
+    node = next(
+        n for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.FunctionDef) and n.name == "transcribe"
+    )
+    body = ast.unparse(node)
+    assert "self._mlx(" in body, "transcribe must hand off to the MLX thread"

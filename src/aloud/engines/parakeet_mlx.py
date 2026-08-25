@@ -49,6 +49,54 @@ FULL_SCALE = 32768.0
 MODEL_FILES = ("config.json", "model.safetensors")
 
 
+class _MLXThread:
+    """One dedicated thread that all MLX work runs on, in order.
+
+    MLX binds its compute streams to threads: the streams come into being on
+    the thread that first touches MLX, and an operation started from a thread
+    the scheduler has never met dies with
+
+        There is no Stream(cpu, 1) in current thread.
+
+    Which is exactly the shape of this app -- the model warms up on a startup
+    thread and transcribes on the job worker. Rather than caring which MLX
+    versions have which threading rules, every touch is funnelled through this
+    one thread, so creation and use are the same thread by construction.
+
+    The thread is a daemon and the queue is unbounded; ``call`` blocks the
+    caller until its function finishes, so ordering and backpressure are the
+    caller's own, same as a direct call. A call made *from* the MLX thread
+    runs inline, which is what lets routed methods call each other.
+    """
+
+    def __init__(self, name: str = "aloud-mlx") -> None:
+        import queue
+
+        self._work: "queue.SimpleQueue" = queue.SimpleQueue()
+        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            fn, args, kwargs, outcome, done = self._work.get()
+            try:
+                outcome["value"] = fn(*args, **kwargs)
+            except BaseException as exc:  # re-raised on the calling thread
+                outcome["error"] = exc
+            done.set()
+
+    def call(self, fn, *args, **kwargs):
+        if threading.current_thread() is self._thread:
+            return fn(*args, **kwargs)
+        outcome: dict = {}
+        done = threading.Event()
+        self._work.put((fn, args, kwargs, outcome, done))
+        done.wait()
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+
+
 class _StreamingUnavailable(RuntimeError):
     """The installed parakeet-mlx does not expose the streaming API we use.
 
@@ -79,6 +127,10 @@ class ParakeetMLXEngine(TranscriptionEngine):
         self._model = None
         self._load_lock = threading.Lock()
         self._load_error: str = ""
+        #: Created on first use, not here: check() builds throwaway engines
+        #: (doctor, the status menu) that never touch MLX at all.
+        self._mlx_thread: Optional[_MLXThread] = None
+        self._mlx_thread_lock = threading.Lock()
 
     # -- contract ----------------------------------------------------------
 
@@ -110,10 +162,17 @@ class ParakeetMLXEngine(TranscriptionEngine):
             state = "not downloaded yet — ~2.4 GB on first use"
         return True, f"{self._model_id()} ({state})"
 
+    def _mlx(self, fn, *args, **kwargs):
+        """Run ``fn`` on the engine's MLX thread; see :class:`_MLXThread`."""
+        with self._mlx_thread_lock:
+            if self._mlx_thread is None:
+                self._mlx_thread = _MLXThread()
+        return self._mlx_thread.call(fn, *args, **kwargs)
+
     def warm_up(self) -> None:
         """Load the model ahead of the first dictation, downloading if needed."""
         try:
-            self._load()
+            self._mlx(self._load)
         except EngineError as exc:
             log.warning("Parakeet warm-up failed: %s", exc)
 
@@ -134,6 +193,9 @@ class ParakeetMLXEngine(TranscriptionEngine):
         decoder instead and the transcript is reported as it forms.
         """
         del bias_terms  # unsupported by this decoder; see `supports_bias`
+        return self._mlx(self._transcribe_on_mlx_thread, wav_path, on_progress)
+
+    def _transcribe_on_mlx_thread(self, wav_path: Path, on_progress) -> Transcript:
         model = self._load()
         started = time.monotonic()
         mode = "whole"
