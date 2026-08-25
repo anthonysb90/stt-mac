@@ -73,6 +73,12 @@ PLIST = {
     # SF Symbols and NSColor dynamic providers; both are Big Sur and later.
     "LSMinimumSystemVersion": "11.0",
     "NSHighResolutionCapable": True,
+    # LaunchServices hands the app no shell environment -- no LANG, so
+    # Python's locale encoding can come up ASCII and any library open()
+    # without an encoding dies on the first non-ASCII byte (parakeet-mlx
+    # reads its model config that way). UTF-8 mode settles it at interpreter
+    # startup; toolpath.repair_locale() covers non-bundle launches.
+    "LSEnvironment": {"PYTHONUTF8": "1"},
     "NSSupportsAutomaticTermination": False,
     "NSSupportsSuddenTermination": False,
     "NSMicrophoneUsageDescription": (

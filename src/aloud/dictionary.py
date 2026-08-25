@@ -274,7 +274,10 @@ class Dictionary:
         # Write-then-rename so a crash mid-save cannot truncate the file the
         # user may also have open in an editor.
         temporary = self.path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n")
+        temporary.write_text(
+            json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
         temporary.replace(self.path)
         self._mtime = self._current_mtime()
 
@@ -309,7 +312,7 @@ class Dictionary:
 
     def _read(self) -> None:
         try:
-            payload = json.loads(self.path.read_text())
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("Could not read %s (%s); keeping the entries in memory", self.path, exc)
             return

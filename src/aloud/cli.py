@@ -37,6 +37,7 @@ def _cmd_doctor(config: Config) -> int:
     from .media import ffmpeg_path
 
     print(f"  ffmpeg      {ffmpeg_path() or 'not found'}")
+    print(f"  encoding    {toolpath.repair_locale()}")
     print("  dock icon   "
           + ("shown" if config.get("interface.dock_icon", True)
              else "hidden (menu bar only)"))
@@ -166,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     # Before any engine is built: `check()` asks whether ffmpeg exists, and the
     # answer has to be the same here as it is in the app.
     toolpath.repair(config.get("tools.path_extra", []))
+    toolpath.repair_locale()
 
     if args.command == "doctor":
         return _cmd_doctor(config)

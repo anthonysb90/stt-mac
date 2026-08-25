@@ -210,7 +210,7 @@ class Config:
             fresh.save()
             return fresh
         try:
-            user = json.loads(CONFIG_FILE.read_text())
+            user = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             log.warning("Could not read %s (%s); using defaults", CONFIG_FILE, exc)
             return cls(copy.deepcopy(DEFAULTS))
@@ -248,7 +248,7 @@ class Config:
 
     def save(self) -> None:
         ensure_dirs()
-        CONFIG_FILE.write_text(json.dumps(self._data, indent=2) + "\n")
+        CONFIG_FILE.write_text(json.dumps(self._data, indent=2) + "\n", encoding="utf-8")
 
     def get(self, path: str, default: Any = None) -> Any:
         """Fetch a nested value with a dotted path, e.g. ``audio.sample_rate``."""

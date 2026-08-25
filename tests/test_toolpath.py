@@ -122,3 +122,68 @@ def test_parakeet_does_not_ask_shutil_which_directly():
     source = (SRC / "engines" / "parakeet_mlx.py").read_text()
     assert 'shutil.which("ffmpeg")' not in source
     assert "ffmpeg_path" in source
+
+
+# -- the locale, which is the same trap in a third disguise ------------------
+
+
+def test_repair_locale_ends_in_utf8():
+    """Whatever the route there, the result must be a UTF-8 default."""
+    result = toolpath.repair_locale().lower().replace("-", "")
+    assert "utf8" in result
+
+
+def test_repair_locale_exports_the_choice_to_children(monkeypatch):
+    """ffmpeg and whisper-cli inherit our environment; they should agree."""
+    monkeypatch.delenv("LANG", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    toolpath.repair_locale()
+    assert os.environ["LANG"] == "en_US.UTF-8"
+    assert os.environ["LC_CTYPE"] == "en_US.UTF-8"
+
+
+def test_repair_locale_respects_an_existing_choice(monkeypatch):
+    """A deliberately-set locale must not be overwritten, only filled in."""
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    toolpath.repair_locale()
+    assert os.environ["LANG"] == "de_DE.UTF-8"
+
+
+def test_the_app_and_cli_repair_the_locale():
+    for name, function in (("app.py", "run"), ("cli.py", "main")):
+        tree = ast.parse((SRC / name).read_text())
+        node = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == function
+        )
+        assert "toolpath.repair_locale" in ast.unparse(node), (
+            f"{name}:{function} must repair the locale before an engine loads"
+        )
+
+
+def test_the_bundle_declares_utf8_mode():
+    """LSEnvironment reaches the interpreter before any Python runs at all."""
+    setup_py = (SRC.parent.parent / "setup.py").read_text()
+    assert '"LSEnvironment"' in setup_py and '"PYTHONUTF8": "1"' in setup_py
+
+
+def test_our_own_text_io_never_relies_on_the_default_encoding():
+    """Explicit utf-8 everywhere, so our files survive even without the repair.
+
+    Walked with ast rather than a regex: these calls nest parentheses
+    (json.dumps inside write_text), which a regex cannot bracket.
+    """
+    offenders = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = node.func
+            if not (isinstance(callee, ast.Attribute)
+                    and callee.attr in ("read_text", "write_text")):
+                continue
+            named = {kw.arg for kw in node.keywords}
+            if "encoding" not in named:
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, f"text I/O without an encoding: {offenders}"

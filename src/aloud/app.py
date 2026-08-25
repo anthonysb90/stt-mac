@@ -433,6 +433,7 @@ def run(config: Config) -> int:
     # inherits none of the shell's PATH, so without this Homebrew's ffmpeg is
     # invisible -- to us and to the libraries that shell out to it themselves.
     toolpath.repair(config.get("tools.path_extra", []))
+    toolpath.repair_locale()
     app = AppKit.NSApplication.sharedApplication()
     # Regular by default -- Dock icon, app menu, a place in the switcher. Set
     # interface.dock_icon to false for the menu-bar-only shape; see ui/dock.py
