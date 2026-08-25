@@ -148,6 +148,20 @@ else
   printf '        Accessibility may need re-granting after a rebuild.\n'
 fi
 
+checkpoint() {
+  # Verifies $2 and reports which step just ran, so a single install
+  # pinpoints exactly where a signature stops verifying instead of leaving
+  # that to another round of guessing. Only $INSTALLED matters here -- that
+  # is what TCC checks -- but the label says which step to blame.
+  local label="$1" target="$2"
+  if OUT=$(codesign --verify --strict --verbose=2 "$target" 2>&1); then
+    field "  [$label]" "verifies"
+  else
+    field "  [$label]" "BROKEN -- first divergence below"
+    printf '%s\n' "$OUT" | grep -m1 "modified\|invalid\|resource" | sed 's/^/        /'
+  fi
+}
+
 # --- 5. Replace ------------------------------------------------------------
 # Only now, with a verified bundle in hand.
 if [ -e "$INSTALLED" ]; then
@@ -161,6 +175,7 @@ fi
 info "Installing to $INSTALLED"
 # ditto preserves symlinks and metadata, and never nests on an existing target.
 ditto "$BUILT" "$INSTALLED" || die "Could not copy the bundle into /Applications"
+checkpoint "after ditto" "$INSTALLED"
 
 # --- 6. Prove it works -----------------------------------------------------
 info "Inspecting the installed bundle"
@@ -183,6 +198,7 @@ fi
 # Without this the Dock and Finder keep showing whatever they cached first.
 touch "$INSTALLED"
 killall Dock >/dev/null 2>&1 || true
+checkpoint "after touch + Dock restart" "$INSTALLED"
 
 info "Starting the bundle to check it runs"
 # stdout and stderr are kept apart on purpose. Libraries under faster-whisper
@@ -196,6 +212,7 @@ if OUT=$("$INSTALLED/Contents/MacOS/Aloud" --version 2>"$ERRLOG"); then
   if [ -s "$ERRLOG" ]; then
     field "notes on stderr" "$(wc -l <"$ERRLOG" | tr -d ' ') line(s), harmless — $ERRLOG"
   fi
+  checkpoint "after first launch" "$INSTALLED"
   printf '\n\033[1;32m==>\033[0m Installed and working: %s\n' "$INSTALLED"
   printf '    Open it from Launchpad, then grant Accessibility and add it to Login Items.\n'
   if [ "$IDENTITY" = "-" ]; then

@@ -387,3 +387,18 @@ def test_a_failed_verification_does_not_block_the_install():
     tail = script[verify:script.index("--- 5. Replace")]
     assert "exit 1" not in tail, "report the signature, do not refuse to install"
     assert "does not verify (expected" in tail
+
+
+def test_install_checkpoints_the_signature_after_every_stage():
+    """One bundle reported "signature ok NO -- file modified: Aloud.icns"
+    with no way to tell which of ditto, the icon-cache touch, or the app's own
+    first launch broke it. Checking after each stage turns "guess again" into
+    "read the output"."""
+    script = (SRC.parent.parent / "scripts" / "install_app.sh").read_text()
+    assert "checkpoint()" in script
+    after_ditto = script.index('checkpoint "after ditto"')
+    after_touch = script.index('checkpoint "after touch')
+    after_launch = script.index('checkpoint "after first launch"')
+    ditto_call = script.index('ditto "$BUILT" "$INSTALLED"')
+    launch_call = script.index('"$INSTALLED/Contents/MacOS/Aloud" --version')
+    assert ditto_call < after_ditto < after_touch < launch_call < after_launch
