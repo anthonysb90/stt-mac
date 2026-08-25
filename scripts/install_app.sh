@@ -57,7 +57,13 @@ fi
 # signature that does not verify. So the outward links are replaced with real
 # files, and dangling ones removed, before anything is signed.
 info "Flattening outward symlinks"
+# Contents/MacOS/python is deleted rather than copied: a virtualenv's python
+# finds its standard library by resolving its own symlink, so a copy of it
+# searches inside the bundle, finds nothing, and dies with "No module named
+# encodings". The bundle's real executable is Contents/MacOS/Aloud, which
+# loads the interpreter through PyRuntimeLocations in Info.plist.
 ./.venv/bin/python scripts/flatten_bundle.py "$BUILT" \
+  --delete Contents/MacOS/python \
   || die "Could not flatten $BUILT"
 
 # --- 3. Sign ---------------------------------------------------------------

@@ -68,7 +68,7 @@ def symlinks(bundle: Path):
     return sorted(found, key=lambda p: len(p.parts), reverse=True)
 
 
-def flatten(bundle: Path, dry_run: bool = False) -> int:
+def flatten(bundle: Path, dry_run: bool = False, delete: list | None = None) -> int:
     bundle = bundle.resolve()
     if not bundle.is_dir():
         print(f"error: {bundle} is not a directory", file=sys.stderr)
@@ -77,9 +77,24 @@ def flatten(bundle: Path, dry_run: bool = False) -> int:
     copied = removed = kept = 0
     total_bytes = 0
 
+    delete = [d.strip("/") for d in (delete or [])]
+
     for link in symlinks(bundle):
         shown = link.relative_to(bundle)
         target_text = os.readlink(link)
+
+        if str(shown) in delete:
+            # Some links cannot be copied into a real file and still work. A
+            # virtualenv's `python` is one: it locates its standard library by
+            # resolving its own symlink, so a copy of it looks inside the
+            # bundle, finds no stdlib, and dies with "No module named
+            # encodings". Removing is the only other option that leaves a
+            # signable bundle.
+            print(f"  removing (unsafe to copy)  {shown} -> {target_text}")
+            if not dry_run:
+                link.unlink()
+            removed += 1
+            continue
 
         if not link.exists():  # follows the link; False when it dangles
             print(f"  removing dangling  {shown} -> {target_text}")
@@ -123,8 +138,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--delete", action="append", default=[],
+        metavar="REL/PATH",
+        help="bundle-relative symlink to remove rather than copy; repeatable",
+    )
     args = parser.parse_args()
-    return flatten(args.bundle, args.dry_run)
+    return flatten(args.bundle, args.dry_run, args.delete)
 
 
 if __name__ == "__main__":
