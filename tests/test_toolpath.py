@@ -274,7 +274,11 @@ def test_install_refuses_to_fall_back_to_ad_hoc_silently():
     assert "exit 1" in script
     assert "codesign failed" in script, "and show codesign's own error"
     assert '2>"$SIGNERR"' in script, "stderr must be captured, not /dev/null"
-    assert "--deep" not in script, (
+    # Comments explaining why --deep is gone are welcome; commands are not.
+    commands = [
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    ]
+    assert not any("--deep" in line for line in commands), (
         "--deep walks an alias bundle's symlinks out to Homebrew and this "
         "checkout, producing a signature that cannot verify -- and TCC will "
         "not hold a grant against one that does not verify"
