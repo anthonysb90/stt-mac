@@ -31,11 +31,25 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import AppKit
+import Foundation
+import objc
 
 from .. import APP_NAME, documents, export, library
 from . import components as C
 from . import tokens as T
 from .formatting import clock, summarise
+
+
+class _CloseDelegate(Foundation.NSObject):
+    def initWithHandler_(self, handler):
+        self = objc.super(_CloseDelegate, self).init()
+        if self is None:
+            return None
+        self._handler = handler
+        return self
+
+    def windowWillClose_(self, _notification):
+        self._handler()
 
 
 class TranscriptWindow:
@@ -109,6 +123,8 @@ class TranscriptWindow:
             vertical=False, spacing=T.SPACE["md"],
         )
         self.window = self._build()
+        self._close_delegate = _CloseDelegate.alloc().initWithHandler_(self._closing)
+        self.window.setDelegate_(self._close_delegate)
 
     @classmethod
     def for_record(cls, record: library.Record, on_changed=None,
@@ -408,7 +424,14 @@ class TranscriptWindow:
             return
         self._editing = True
         self._before_edit = self.record.text
+        # Search results point into the layout text, not this one: drop them,
+        # or the arrows would select wrong -- or out-of-range -- text.
+        self._matches, self._match_index = [], -1
+        self.match_label.setStringValue_("")
+        self.previous_match.setEnabled_(False)
+        self.next_match.setEnabled_(False)
         self._set_body(self.record.text)
+        self.body.setAllowsUndo_(True)  # ⌘Z while editing
         self.body.setEditable_(True)
         self.layout_popup.setEnabled_(False)
         self.search.setEnabled_(False)
@@ -419,7 +442,7 @@ class TranscriptWindow:
             "you press Done, so they are corrected automatically next time.")
         self.window.makeFirstResponder_(self.body)
 
-    def _finish_edit(self) -> None:
+    def _finish_edit(self, offer: bool = True) -> None:
         from .. import learn
 
         record = self.record
@@ -429,6 +452,8 @@ class TranscriptWindow:
         self.body.setEditable_(False)
         self.layout_popup.setEnabled_(True)
         self.search.setEnabled_(True)
+        self.previous_match.setEnabled_(True)
+        self.next_match.setEnabled_(True)
         self.speakers_button.setEnabled_(True)
         self.edit_button.setTitle_("Edit")
         self.status.setStringValue_(_record_summary(record))
@@ -448,7 +473,8 @@ class TranscriptWindow:
                 _alert("Could not save your edits", str(exc))
         self._render()
         self._changed()
-        self._offer_to_learn(found)
+        if offer:
+            self._offer_to_learn(found)
 
     def _offer_to_learn(self, found) -> None:
         """"Always correct these?" — with a box per fix, all ticked."""
@@ -478,6 +504,11 @@ class TranscriptWindow:
         problems = teacher.teach(chosen)
         if problems:
             _alert("Some fixes were not added", "\n".join(problems))
+
+    def _closing(self) -> None:
+        """Closing mid-edit keeps the edits, rather than dropping them."""
+        if self._editing:
+            self._finish_edit(offer=False)
 
     def _changed(self) -> None:
         if self._on_changed is not None:

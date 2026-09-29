@@ -175,11 +175,16 @@ class Watcher:
                     continue  # still arriving, or only just arrived
                 if signature[0] == 0:
                     continue
+                # Marked before handing over: the job can finish -- and report
+                # through finished() -- before _queue even returns.
+                with self._lock:
+                    self._state[key] = {"status": "queued", "at": now}
                 if self._queue(path, self.settings.exports_for(path)):
-                    with self._lock:
-                        self._state[key] = {"status": "queued", "at": now}
                     self._pending.pop(key, None)
                     queued.append(path)
+                else:
+                    with self._lock:
+                        self._state.pop(key, None)
         if queued:
             with self._lock:
                 self._save()

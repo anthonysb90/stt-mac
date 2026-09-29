@@ -96,6 +96,7 @@ class AloudDelegate(Foundation.NSObject):
             on_quick=lambda: self.quick.show(start=True),
             on_batch=self._begin_batch,
             on_cancel_job=self._cancel_queued,
+            on_open_unsaved=self._open_unsaved,
         )
         self.quick = QuickDictateWindow(self.controller, on_saved=self._library_changed)
         self.models_window = ModelsWindow(self.controller, on_changed=self._models_changed)
@@ -273,13 +274,21 @@ class AloudDelegate(Foundation.NSObject):
     # on the main thread too, so by the time a block runs, the window is there.
 
     @objc.python_method
-    def _with_window(self, job, action, pop: bool = False, queued=None) -> None:
-        """Send a file's news to its window -- or, with none, to its queue row."""
+    def _with_window(self, job, action, pop: bool = False, queued=None,
+                     finished=None) -> None:
+        """Send a file's news to its window -- or, with none, to its queue row.
+
+        ``finished`` is ``(ok, detail)`` when this event ends the job: the
+        watcher is told on the main thread, after the job was registered.
+        """
         if getattr(job, "source", "") != "file":
             return
         job_id = job.id
 
         def run() -> None:
+            if finished is not None:
+                self._watch_done_id(job_id, *finished)
+                self._queued_jobs.pop(job_id, None)
             windows = self._import_windows
             window = windows.pop(job_id, None) if pop else windows.get(job_id)
             if window is not None:
@@ -330,14 +339,12 @@ class AloudDelegate(Foundation.NSObject):
 
     @objc.python_method
     def on_cancelled(self, job) -> None:
-        self._watch_done(job, False, "stopped")
         self._with_window(job, lambda w: w.cancelled(), pop=True,
-                          queued=lambda q, j: q.failed(j, "Stopped"))
+                          queued=lambda q, j: q.failed(j, "Stopped"),
+                          finished=(False, "stopped"))
 
     @objc.python_method
     def on_result(self, dictation) -> None:
-        if dictation.source == "file":
-            self._watch_done_id(dictation.job_id, True)
         run_on_main(lambda: self._deliver_result(dictation))
 
     @objc.python_method
@@ -345,6 +352,7 @@ class AloudDelegate(Foundation.NSObject):
         self.main_window.on_result()
         if dictation.source != "file":
             return
+        self._watch_done_id(dictation.job_id, True)
         window = self._import_windows.pop(dictation.job_id, None)
         queue = self._queue()
         if window is None and queue is not None and queue.has(dictation.job_id):
@@ -352,7 +360,7 @@ class AloudDelegate(Foundation.NSObject):
             detail = f"Done · {words:,} words"
             if dictation.exported:
                 detail += " · saved " + ", ".join(p.name for p in dictation.exported)
-            queue.done(dictation.job_id, dictation.record, detail)
+            queue.done(dictation.job_id, dictation.record, detail, dictation)
             self._queued_jobs.pop(dictation.job_id, None)
             return
         if window is None:
@@ -363,18 +371,19 @@ class AloudDelegate(Foundation.NSObject):
 
     @objc.python_method
     def on_empty(self, job) -> None:
-        self._watch_done(job, False, "no speech")
         self._with_window(
             job, lambda w: w.fail(f"No speech was recognised in {job.label}."), pop=True,
-            queued=lambda q, j: q.failed(j, "No speech was recognised"))
+            queued=lambda q, j: q.failed(j, "No speech was recognised"),
+            finished=(False, "no speech"))
 
     @objc.python_method
     def on_job_failed(self, job, title: str, message: str) -> None:
         """A file failed: say so in its own window or queue row, not an alert."""
-        self._watch_done(job, False, message)
         job_id = job.id
 
         def run() -> None:
+            self._watch_done_id(job_id, False, message)
+            self._queued_jobs.pop(job_id, None)
             window = self._import_windows.pop(job_id, None)
             queue = self._queue()
             if window is not None:
@@ -403,6 +412,13 @@ class AloudDelegate(Foundation.NSObject):
                 self.main_window.transcribe.queue.add(job.id, path.name, origin)
 
     @objc.python_method
+    def _open_unsaved(self, dictation) -> None:
+        """A queued result that is not in the library: open it anyway."""
+        window = self._new_transcript_window(dictation.label or "Transcript")
+        window.show()
+        window.finish(dictation)
+
+    @objc.python_method
     def _cancel_queued(self, job_id) -> None:
         job = self._queued_jobs.get(job_id)
         if job is not None:
@@ -410,18 +426,27 @@ class AloudDelegate(Foundation.NSObject):
 
     @objc.python_method
     def _queue_watched(self, path, exports):
-        """Called by the watcher, on its own thread, for each new recording."""
-        job = self.controller.transcribe_file(path, origin="watch", exports=exports)
-        if job is None:
-            return False
-        self._watch_paths[job.id] = path
-        self._queued_jobs[job.id] = job
-        run_on_main(lambda: self.main_window.transcribe.queue.add(job.id, path.name, "watch"))
-        return True
+        """Called by the watcher, on its own thread, for each new recording.
 
-    @objc.python_method
-    def _watch_done(self, job, ok: bool, detail: str = "") -> None:
-        self._watch_done_id(getattr(job, "id", None), ok, detail)
+        The job is queued *on the main thread*, together with its queue row
+        and bookkeeping. Queued from here, a file that failed at once could
+        report before its row existed: a stray alert, a row stuck on
+        "Waiting", and an outcome the watcher never heard.
+        """
+        def queue_it() -> None:
+            job = None
+            if path.exists():
+                job = self.controller.transcribe_file(path, origin="watch", exports=exports)
+            if job is None:
+                if self.watcher is not None:
+                    self.watcher.finished(path, False, "gone or refused")
+                return
+            self._watch_paths[job.id] = path
+            self._queued_jobs[job.id] = job
+            self.main_window.transcribe.queue.add(job.id, path.name, "watch")
+
+        run_on_main(queue_it)
+        return True
 
     @objc.python_method
     def _watch_done_id(self, job_id, ok: bool, detail: str = "") -> None:

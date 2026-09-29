@@ -540,6 +540,8 @@ class SettingsWindow:
 
     def _refresh_snippets(self) -> None:
         C.clear(self._snippet_list)
+        # A fresh keeper per rebuild: the old rows' buttons are gone with it.
+        self._snippet_keeper = keeper = []
         snippets = self._snippets()
         if not snippets:
             self._snippet_list.addArrangedSubview_(
@@ -549,7 +551,7 @@ class SettingsWindow:
             first_line = snippets[trigger].strip().splitlines()[0] if snippets[trigger].strip() else ""
             label = C.label(f"“{trigger}”  →  {first_line}", T.TYPE_BODY, T.TEXT_SECONDARY)
             remove = C.button("Remove", lambda _s, t=trigger: self._remove_snippet(t),
-                              self._keeper)
+                              keeper)
             row = C.stack([label, C.spacer(), remove], vertical=False, spacing=T.SPACE["md"])
             self._snippet_list.addArrangedSubview_(row)
             row.widthAnchor().constraintEqualToAnchor_(
@@ -649,6 +651,7 @@ class SettingsWindow:
 
     def _refresh_watch_list(self) -> None:
         C.clear(self._watch_list)
+        self._watch_keeper = keeper = []
         folders = self._folders()
         if not folders:
             self._watch_list.addArrangedSubview_(
@@ -657,7 +660,7 @@ class SettingsWindow:
         for folder in folders:
             path = C.label(folder, T.TYPE_MONO, T.TEXT_SECONDARY)
             remove = C.button("Remove", lambda _s, f=folder: self._remove_watch_folder(f),
-                              self._keeper)
+                              keeper)
             row = C.stack([path, C.spacer(), remove], vertical=False, spacing=T.SPACE["md"])
             self._watch_list.addArrangedSubview_(row)
             row.widthAnchor().constraintEqualToAnchor_(

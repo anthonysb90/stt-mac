@@ -20,8 +20,10 @@ ORIGIN_NOTES = {"batch": "", "watch": "from a watch folder"}
 
 
 class QueueView:
-    def __init__(self, on_open: Callable, on_cancel: Callable) -> None:
+    def __init__(self, on_open: Callable, on_cancel: Callable,
+                 on_open_unsaved: Callable = None) -> None:
         self._on_open = on_open
+        self._on_open_unsaved = on_open_unsaved
         self._on_cancel = on_cancel
         self._keeper: list = []
         self._rows: Dict[int, dict] = {}
@@ -30,8 +32,18 @@ class QueueView:
         self.header = C.stack([C.label("Queue", T.TYPE_TITLE_3), C.spacer(), clear],
                               vertical=False, spacing=T.SPACE["md"])
         self.list = C.stack([], spacing=T.SPACE["md"])
-        self.view = C.stack([self.header, self.list], spacing=T.SPACE["md"])
-        for part in (self.header, self.list):
+        # Scrolls past a few rows: twenty dropped files used to push the
+        # window taller than the screen. As tall as its rows, up to a limit.
+        self.scroll = C.scroller(self.list)
+        self.list.widthAnchor().constraintEqualToAnchor_(
+            self.scroll.widthAnchor()).setActive_(True)
+        self.scroll.heightAnchor().constraintLessThanOrEqualToConstant_(
+            T.METRIC["queue_height_max"]).setActive_(True)
+        fit = self.scroll.heightAnchor().constraintEqualToAnchor_(self.list.heightAnchor())
+        fit.setPriority_(AppKit.NSLayoutPriorityDefaultHigh)
+        fit.setActive_(True)
+        self.view = C.stack([self.header, self.scroll], spacing=T.SPACE["md"])
+        for part in (self.header, self.scroll):
             part.widthAnchor().constraintEqualToAnchor_(self.view.widthAnchor()).setActive_(True)
         self.view.setHidden_(True)
 
@@ -77,11 +89,14 @@ class QueueView:
         row["bar"].setHidden_(False)
         row["bar"].setDoubleValue_(max(0.0, min(fraction, 1.0)))
 
-    def done(self, job_id: int, record, detail: str) -> None:
+    def done(self, job_id: int, record, detail: str, dictation=None) -> None:
         row = self._finish(job_id, detail, T.STATUS_SUCCESS)
         if row is not None:
             row["record"] = record
-            row["open"].setHidden_(record is None)
+            # Kept so Open works even when the library is off or its save
+            # failed -- otherwise the transcript would be unreachable.
+            row["dictation"] = dictation
+            row["open"].setHidden_(record is None and dictation is None)
 
     def failed(self, job_id: int, message: str) -> None:
         self._finish(job_id, message, T.STATUS_ERROR)
@@ -99,8 +114,12 @@ class QueueView:
 
     def _open(self, job_id: int) -> None:
         row = self._rows.get(job_id)
-        if row is not None and row["record"] is not None:
+        if row is None:
+            return
+        if row["record"] is not None:
             self._on_open(row["record"])
+        elif row.get("dictation") is not None and self._on_open_unsaved is not None:
+            self._on_open_unsaved(row["dictation"])
 
     def clear_finished(self) -> None:
         for job_id in [j for j, row in self._rows.items() if row["done"]]:

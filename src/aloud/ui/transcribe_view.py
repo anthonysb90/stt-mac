@@ -24,7 +24,8 @@ class TranscribeView:
     """Drop zone, file details, and the button that starts the work."""
 
     def __init__(self, on_transcribe: Callable[[Path], None], on_batch: Callable = None,
-                 on_open: Callable = None, on_cancel_job: Callable = None) -> None:
+                 on_open: Callable = None, on_cancel_job: Callable = None,
+                 on_open_unsaved: Callable = None) -> None:
         self._on_transcribe = on_transcribe
         self._on_batch = on_batch
         self._keeper: list = []
@@ -43,7 +44,8 @@ class TranscribeView:
         from .queue_view import QueueView
 
         self.queue = QueueView(on_open=on_open or (lambda _r: None),
-                               on_cancel=on_cancel_job or (lambda _j: None))
+                               on_cancel=on_cancel_job or (lambda _j: None),
+                               on_open_unsaved=on_open_unsaved)
 
         self.details = C.stack([], spacing=T.SPACE["sm"])
         self.details.setAlignment_(AppKit.NSLayoutAttributeLeading)

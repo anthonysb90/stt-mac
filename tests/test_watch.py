@@ -149,3 +149,38 @@ def test_a_watched_file_is_exported_next_to_itself(app, tmp_path):
     app._run_job(Job(audio=source, deliver=False, source="file", label=source.name,
                      exports=[("txt", "plain", str(folder / "Transcripts"))]))
     assert (folder / "Transcripts" / "evening service (2).txt").exists(), "never overwritten"
+
+
+def test_a_job_that_finishes_during_hand_over_is_still_recorded(tmp_path):
+    """The file is marked before it is handed over, so an instant result lands."""
+    clock = Clock()
+    folder = tmp_path / "In"
+    folder.mkdir()
+    sermon = folder / "sermon.mp3"
+    sermon.write_bytes(b"x")
+    age(sermon, 60, clock.now)
+    watcher = None
+
+    def queue(path, exports):
+        watcher.finished(path, ok=False, detail="ffmpeg failed at once")
+        return True
+
+    watcher = watch.Watcher(watch.Settings(folders=[folder]), queue,
+                            state_file=tmp_path / "state.json", clock=clock)
+    watcher.scan()
+    watcher.scan()
+    assert watcher.status(sermon) == "failed"
+
+
+def test_a_refused_hand_over_leaves_the_file_to_try_again(tmp_path):
+    clock = Clock()
+    folder = tmp_path / "In"
+    folder.mkdir()
+    sermon = folder / "sermon.mp3"
+    sermon.write_bytes(b"x")
+    age(sermon, 60, clock.now)
+    watcher = watch.Watcher(watch.Settings(folders=[folder]), lambda p, e: False,
+                            state_file=tmp_path / "state.json", clock=clock)
+    watcher.scan()
+    watcher.scan()
+    assert watcher.status(sermon) == ""

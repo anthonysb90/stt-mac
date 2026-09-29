@@ -60,7 +60,7 @@ class MainWindow:
     def __init__(self, controller, on_settings: Callable,
                  on_transcribe: Callable, on_open_record: Callable = None,
                  on_quick: Callable = None, on_batch: Callable = None,
-                 on_cancel_job: Callable = None) -> None:
+                 on_cancel_job: Callable = None, on_open_unsaved: Callable = None) -> None:
         self._on_batch = on_batch
         self.controller = controller
         self._on_settings = on_settings
@@ -75,7 +75,8 @@ class MainWindow:
             controller.dictionary, on_changed=controller.reload_rules
         )
         self.transcribe = TranscribeView(on_transcribe=on_transcribe, on_batch=on_batch,
-                                         on_open=on_open_record, on_cancel_job=on_cancel_job)
+                                         on_open=on_open_record, on_cancel_job=on_cancel_job,
+                                         on_open_unsaved=on_open_unsaved)
 
         self.state_pill = C.label("Idle", T.TYPE_BODY_STRONG, T.STATUS_IDLE)
         self.meter = LevelMeter.alloc().initWithSource_(lambda: self.controller.level)
