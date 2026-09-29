@@ -147,6 +147,12 @@ class TextInjector:
         self.restore_clipboard = restore_clipboard
         self.restore_delay = restore_delay
         self.trailing_space = trailing_space
+        #: The clipboard as it was before a run of quick dictations, and the
+        #: text we last put there. See _take_snapshot.
+        self._lock = threading.Lock()
+        self._original: Optional[Snapshot] = None
+        self._last_payload: Optional[str] = None
+        self._generation = 0
 
     def deliver(self, text: str) -> None:
         if not text:
@@ -162,22 +168,48 @@ class TextInjector:
         if self.mode != "paste":
             raise InjectionError(f"Unknown output mode {self.mode!r}")
 
-        previous = snapshot_clipboard() if self.restore_clipboard else None
+        generation = self._take_snapshot() if self.restore_clipboard else None
         write_clipboard(payload)
+        with self._lock:
+            self._last_payload = payload
         # A beat for the pasteboard write to land before the target app reads it.
         time.sleep(0.03)
         send_command_v()
 
-        if previous is not None:
-            self._restore_later(previous, payload)
+        if generation is not None:
+            self._restore_later(generation, payload)
 
-    def _restore_later(self, previous: Snapshot, payload: str) -> None:
+    def _take_snapshot(self) -> int:
+        """Remember what to put back, once per run of quick dictations.
+
+        Two dictations inside the restore delay used to lose the clipboard:
+        the second snapshot captured the first dictation's text, the first
+        restore stood down (the clipboard no longer matched), and the second
+        restore put the *dictation* back instead of what the person had
+        copied. Now a snapshot taken while our own text is still on the
+        clipboard is not a snapshot at all -- the original is kept, and only
+        the latest dictation's restore runs.
+        """
+        with self._lock:
+            ours = self._original is not None and self._last_payload is not None
+            if not ours or read_clipboard() != self._last_payload:
+                # Nothing pending, or the person copied something new since.
+                self._original = snapshot_clipboard()
+            self._generation += 1
+            return self._generation
+
+    def _restore_later(self, generation: int, payload: str) -> None:
         """Put the old clipboard back, but only if we still own the pasteboard."""
 
         def restore() -> None:
             time.sleep(self.restore_delay)
             try:
-                if read_clipboard() == payload:
+                with self._lock:
+                    if generation != self._generation:
+                        return  # a later dictation will restore instead
+                    previous, self._original = self._original, None
+                    self._last_payload = None
+                if previous is not None and read_clipboard() == payload:
                     restore_clipboard(previous)
             except Exception:
                 log.exception("Failed to restore the clipboard")

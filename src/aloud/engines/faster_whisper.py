@@ -51,6 +51,10 @@ class FasterWhisperEngine(TranscriptionEngine):
         state = "loaded" if self._model is not None else "not loaded yet"
         return True, f"{self._model_id()} · {self.options.get('compute_type', 'int8')} ({state})"
 
+    def close(self) -> None:
+        """Drop the model. A transcription in progress holds its own reference."""
+        self._model = None
+
     def warm_up(self) -> None:
         try:
             self._load()

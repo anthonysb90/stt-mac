@@ -198,7 +198,7 @@ def _cmd_warm(config: Config) -> int:
 
 
 def _cmd_transcribe(config: Config, path: Path, engine_name: str, fmt: str,
-                    output: Path | None) -> int:
+                    output: Path | None, layout_key: str = "manuscript") -> int:
     """Transcribe any audio or video file, through the same path as the app.
 
     Uses the file engine unless ``--engine`` names another, applies the
@@ -214,6 +214,11 @@ def _cmd_transcribe(config: Config, path: Path, engine_name: str, fmt: str,
     target_format = export.BY_KEY.get(fmt)
     if target_format is None:
         print(f"Unknown format {fmt!r}. Try: {', '.join(export.BY_KEY)}", file=sys.stderr)
+        return 2
+    layout = export.LAYOUT_BY_KEY.get(layout_key)
+    if layout is None:
+        print(f"Unknown layout {layout_key!r}. Try: {', '.join(export.LAYOUT_BY_KEY)}",
+              file=sys.stderr)
         return 2
     if engine_name:
         config.set("file_engine", engine_name)
@@ -235,6 +240,9 @@ def _cmd_transcribe(config: Config, path: Path, engine_name: str, fmt: str,
         def on_error(self, title, message):
             results["error"] = f"{title}: {message}"
 
+        def on_job_failed(self, _job, title, message):
+            results["error"] = f"{title}: {message}"
+
         def on_progress(self, _job, _text, done, total):
             if total > 0 and sys.stderr.isatty():
                 print(f"\r  {done / total:6.1%}", end="", file=sys.stderr, flush=True)
@@ -253,19 +261,46 @@ def _cmd_transcribe(config: Config, path: Path, engine_name: str, fmt: str,
         print(f"error: {results.get('error', 'no speech was recognised')}", file=sys.stderr)
         return 1
     dictation = results["dictation"]
+    if dictation.warning:
+        print(f"warning: {dictation.warning}", file=sys.stderr)
+    if dictation.record is not None:
+        doc = export.doc_from_record(dictation.record)
+        print(f"Saved to the library: {dictation.record.folder}", file=sys.stderr)
+    else:
+        doc = export.Doc(path.stem, dictation.text, dictation.segments, {}, "")
     try:
-        rendered = export.render(target_format, dictation.text, dictation.segments)
+        rendered = export.render(target_format, layout, doc)
     except ValueError as exc:
         print(f"error: {exc}. Try --format txt.", file=sys.stderr)
         return 1
 
     if output is None:
-        sys.stdout.write(rendered)
+        if target_format.key in ("docx", "pdf"):
+            print("error: Word and PDF are binary; give a file with -o.", file=sys.stderr)
+            return 2
+        sys.stdout.write(rendered.decode("utf-8"))
     else:
-        output.write_text(rendered, encoding="utf-8")
+        output.write_bytes(rendered)
         print(f"Wrote {output}", file=sys.stderr)
     print(f"[{dictation.engine} · {dictation.seconds:.1f}s · "
           f"{len(dictation.segments)} segments]", file=sys.stderr)
+    return 0
+
+
+def _cmd_library(query: str) -> int:
+    """Saved transcripts, newest first, or those matching ``query``."""
+    import time
+
+    from . import library
+
+    hits = library.search(query, library.all_records())
+    for hit in hits:
+        record = hit.record
+        when = time.strftime("%Y-%m-%d", time.localtime(record.created_at))
+        print(f"{when}  {record.title}")
+        if query:
+            print(f"            {hit.snippet}")
+    print(f"\n{len(hits)} transcript(s) in {library.LIBRARY_DIR}", file=sys.stderr)
     return 0
 
 
@@ -373,9 +408,14 @@ def main(argv: list[str] | None = None) -> int:
     transcribe.add_argument("--engine", default="",
                             help="engine to use instead of the configured file engine")
     transcribe.add_argument("--format", default="txt",
-                            help="txt, timestamped, srt or vtt (default txt)")
+                            help="txt, docx, pdf, md, html, json, csv, srt or vtt (default txt)")
+    transcribe.add_argument("--layout", default="manuscript",
+                            help="plain, manuscript, timestamps, timestamps_speakers or "
+                                 "speakers (default manuscript)")
     transcribe.add_argument("-o", "--output", type=Path, default=None,
                             help="write to this file instead of printing")
+    lib = sub.add_parser("library", help="list or search saved transcripts")
+    lib.add_argument("query", nargs="*", help="words to search for")
     model_cmd = sub.add_parser("models", help="list, download or delete local models")
     model_cmd.add_argument("action", choices=["list", "download", "delete"], nargs="?",
                            default="list")
@@ -405,7 +445,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tap-test":
         return _cmd_tap_test(args.seconds)
     if args.command == "transcribe":
-        return _cmd_transcribe(config, args.file, args.engine, args.format, args.output)
+        return _cmd_transcribe(config, args.file, args.engine, args.format, args.output,
+                               args.layout)
+    if args.command == "library":
+        return _cmd_library(" ".join(args.query))
     if args.command == "models":
         if args.action != "list" and not args.name:
             parser.error(f"models {args.action} needs a model name")

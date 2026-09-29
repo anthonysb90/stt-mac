@@ -87,12 +87,27 @@ class OpenAIEngine(TranscriptionEngine):
         texts: List[str] = []
         segments: List[Segment] = []
         language = str(self.options.get("language", "") or "")
+        warning = ""
         try:
             for index, chunk in enumerate(chunks):
                 # The previous chunk's tail is the best prompt for this one:
                 # it carries names and spelling across the cut.
                 context = texts[-1][-200:] if texts else ""
-                payload = self._send(chunk.path, bias_terms, context)
+                try:
+                    payload = self._send(chunk.path, bias_terms, context)
+                except EngineError as exc:
+                    if not texts:
+                        raise
+                    # Keep what was already transcribed -- and paid for --
+                    # rather than discarding it with the chunk that failed.
+                    from ..export import clock
+
+                    warning = (
+                        f"Stopped at {clock(chunk.offset)} of {clock(total)}: {exc} "
+                        "The text covers everything before that point."
+                    )
+                    log.warning("%s", warning)
+                    break
                 piece = str(payload.get("text", "")).strip()
                 if piece:
                     texts.append(piece)
@@ -115,7 +130,7 @@ class OpenAIEngine(TranscriptionEngine):
             engine=self.name,
             duration=time.monotonic() - started,
             language=language,
-            meta={"model": self._model(), "chunks": len(chunks)},
+            meta={"model": self._model(), "chunks": len(chunks), "warning": warning},
             segments=segments,
         )
 

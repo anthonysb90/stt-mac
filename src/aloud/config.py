@@ -229,6 +229,10 @@ DEFAULTS: Dict[str, Any] = {
         },
     },
     "history": {"enabled": True, "max_entries": 500},
+    # Every transcribed file is kept in Transcripts/ under the support folder,
+    # with its timings and speaker names, so it can be reopened, searched and
+    # exported again. Dictations are not: they live in the history.
+    "library": {"enabled": True},
     "logging": {"level": "INFO"},
 }
 

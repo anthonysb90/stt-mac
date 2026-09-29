@@ -53,19 +53,33 @@ def record(
 
 def _trim(max_entries: int) -> None:
     try:
-        lines = HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+        # errors="replace": one damaged byte must not make the file unreadable.
+        lines = HISTORY_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return
     if len(lines) <= max_entries:
         return
-    HISTORY_FILE.write_text("\n".join(lines[-max_entries:]) + "\n", encoding="utf-8")
+    # Written aside and renamed into place: rewriting in place meant a crash
+    # or a full disk mid-write truncated the whole history.
+    temporary = HISTORY_FILE.with_name(HISTORY_FILE.name + ".tmp")
+    try:
+        temporary.write_text("\n".join(lines[-max_entries:]) + "\n", encoding="utf-8")
+        temporary.replace(HISTORY_FILE)
+    except OSError:
+        log.exception("Could not trim the history file")
+        temporary.unlink(missing_ok=True)
 
 
 def recent(limit: int = 10) -> List[Dict[str, Any]]:
     if not HISTORY_FILE.exists():
         return []
     entries = []
-    for line in HISTORY_FILE.read_text(encoding="utf-8").splitlines()[-limit:]:
+    try:
+        text = HISTORY_FILE.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        log.exception("Could not read the history file")
+        return []
+    for line in text.splitlines()[-limit:]:
         try:
             entries.append(json.loads(line))
         except json.JSONDecodeError:

@@ -132,3 +132,29 @@ def test_snapshot_round_trips_multiple_representations():
     restored = pasteboard.pasteboardItems()[0]
     assert restored.dataForType_("public.html") == b"<b>rich</b>"
     assert restored.dataForType_("public.utf8-plain-text") == b"rich"
+
+
+def test_two_quick_dictations_still_restore_what_you_had_copied():
+    """The second snapshot used to capture the first dictation instead."""
+    import time
+
+    write_clipboard("my sermon notes")
+    injector = TextInjector(mode="paste", restore_clipboard=True, restore_delay=0.3,
+                            trailing_space=False)
+    injector.deliver("first")
+    injector.deliver("second")  # well inside the first one's restore delay
+    time.sleep(0.8)
+    assert read_clipboard() == "my sermon notes"
+
+
+def test_something_copied_between_dictations_is_the_one_restored():
+    import time
+
+    write_clipboard("old")
+    injector = TextInjector(mode="paste", restore_clipboard=True, restore_delay=0.3,
+                            trailing_space=False)
+    injector.deliver("first")
+    write_clipboard("copied in between")
+    injector.deliver("second")
+    time.sleep(0.8)
+    assert read_clipboard() == "copied in between"

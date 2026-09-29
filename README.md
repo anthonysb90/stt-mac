@@ -71,7 +71,7 @@ application menu, so `⌘,` and `⌘Q` stop working. The menu bar icon carries
 Open, Settings and Quit, so nothing is lost. It takes effect immediately, and
 with the Dock icon off the main window no longer opens at launch.
 
-**Main window** — `⌘1` History, `⌘2` Dictionary.
+**Main window** — `⌘1` History, `⌘2` Dictionary, `⌘3` Transcripts.
 
 * **History** — every dictation, searchable, one click to copy. When the
   Dictionary changed something, the row says what fired and washes the changed
@@ -93,18 +93,46 @@ indicator — a bar alone cannot tell slow from stuck. When it finishes, the sam
 window gains Copy and Save. The text is deliberately *not* typed into whatever
 app you had open.
 
-**Save** offers every format the transcript supports:
+When it finishes, that window *is* the transcript:
 
-| Format | When it is offered |
+* **Highlight and copy** any part with the mouse and ⌘C, or **Copy All**.
+* **View** switches the layout. What you see is what Copy All copies.
+* **Search** highlights every match and steps through them (↑ ↓). ⌘F opens the
+  standard find bar; ⌘G jumps to the next match.
+* **Speakers…** names the voices ("Speaker 1" → "Pastor Tim") when the engine
+  labelled them. Every layout and export uses the names.
+* **The title** is editable — click it and retype.
+* **Export…** picks a format *and* a layout:
+
+| Layout | Looks like |
 | --- | --- |
-| Plain Text (`.txt`) | Always. Split by speaker when speakers were labelled |
-| Text with Timestamps (`.txt`) | `[0:12:04] Speaker 2: …` — when the engine reported timings |
-| Subtitles (`.srt`) | Same. Long lines are split to subtitle size (≤ 2 × 42 characters, ≤ 7 s) |
-| Web Subtitles (`.vtt`) | Same, with `<v Speaker>` voice tags |
+| Plain Text | The words, one block |
+| Manuscript | Paragraphs broken at pauses, speaker names as headings — for reading and editing |
+| Text with Timestamps | `[0:12:04] …` one line per segment |
+| Timestamps and Speakers | `[0:12:04] Pastor Tim: …` |
+| Speaker Names | `Pastor Tim: …` one paragraph per turn, like a script |
 
-Every engine except the mock reports timings, with one exception: OpenAI's
-`gpt-4o-*-transcribe` models return text only, so they get plain text only.
-The Dictionary's corrections apply to the subtitles too, not just the text.
+| Format | Notes |
+| --- | --- |
+| Plain Text, Word (.docx), PDF, Markdown, HTML | Any layout |
+| JSON | Everything: text, segments, timings, speaker names |
+| CSV | One row per segment: start, end, speaker, text |
+| SRT, WebVTT | Subtitles, cut to subtitle length (≤ 2 × 42 characters, ≤ 7 s) |
+
+Timed layouts and formats appear only when the engine reported timings. Every
+engine does except OpenAI's `gpt-4o-*-transcribe` models. PDF uses the fonts
+built into every PDF reader, which cover English, Spanish, French, Portuguese,
+German and other Western European languages; for Korean, Chinese, Russian or
+Arabic, export Word or HTML — the export window warns you when this applies.
+The Dictionary's corrections apply to every layout, subtitles included.
+
+**Transcripts** (`⌘3`) — every file you transcribe is kept. Search across all
+of them at once (titles, full text and speaker names), open any one back into
+its window, show it in Finder, or move it to the Trash. They live in
+`~/Library/Application Support/Aloud/Transcripts/`, one folder each:
+`transcript.json` holds everything, including the engine's raw output before
+any Dictionary corrections, and `transcript.txt` is a readable copy that
+Finder, Quick Look and Spotlight can use without Aloud.
 
 **Files can use a different engine from dictation.** Settings → Model → *Files*.
 Dictate locally with Parakeet, say, and send a two-hour meeting to AssemblyAI
@@ -116,7 +144,10 @@ lists rebuild as they open, so a headset plugged in a moment ago is there.
 
 **Updating** — **Aloud → Check for Updates…** pulls and offers to relaunch. A
 copy installed from a zip can be attached to the repository in place, keeping
-its virtualenv and settings.
+its virtualenv and settings. It follows the branch the copy was installed
+from, so a change shows up there once it has been merged into that branch.
+Most updates need only the relaunch; the dialog says when one changed the
+build and needs `make install` as well.
 
 **Models** (Aloud → Models…, or *Manage Models…* in Settings) — every local
 model for this Mac with its size and languages, a Download button with real
@@ -184,7 +215,9 @@ The CLI also works standalone, which is handy for isolating problems:
 .venv/bin/aloud key deepgram    # store a cloud API key (also openai, groq, assemblyai, elevenlabs)
 .venv/bin/aloud transcribe talk.mp4                      # any audio or video; uses the file engine
 .venv/bin/aloud transcribe talk.mp4 --format srt -o talk.srt
-.venv/bin/aloud transcribe talk.mp4 --engine assemblyai --format timestamped
+.venv/bin/aloud transcribe talk.mp4 --format docx --layout speakers -o talk.docx
+.venv/bin/aloud transcribe talk.mp4 --engine assemblyai --layout timestamps_speakers
+.venv/bin/aloud library grace romans                     # search saved transcripts
 .venv/bin/aloud models                                   # local models, and which are downloaded
 .venv/bin/aloud models download large-v3-turbo
 .venv/bin/aloud history -n 20
@@ -303,9 +336,11 @@ rules, the latency budget, and who owns cleanup.
   ElevenLabs calls, and model downloads from Hugging Face. All are tested
   against a local server that plays the service (request shape, chunking,
   polling, timings, errors, cancelled downloads), not against the services.
-* **Never run on a Mac yet** — the Models window, the file-engine setting in
-  Settings, and the format picker in the Save panel. Their logic is tested;
-  their layout has not been seen.
+* **Never run on a Mac yet** — the Models window, the Transcripts pane, the
+  rebuilt transcript window (views, search, speaker names, export), and the
+  file-engine setting. Their logic is tested; their layout has not been seen.
+  Word and PDF output is checked against real readers (python-docx, pypdf,
+  PyMuPDF), not only by our own code.
 
 Off-hardware the suite covers the hotkey state machine, the correction engine's
 matching and risk analysis, the Dictionary file format, per-architecture engine
@@ -380,7 +415,9 @@ src/aloud/
                   OpenAI · Groq · AssemblyAI · ElevenLabs · mock, plus
                   per-architecture `auto` selection
   segments.py     timed pieces of a transcript: grouping words, subtitle sizing
-  export.py       txt · timestamped txt · SRT · WebVTT
+  export.py       layouts × formats: txt · docx · pdf · md · html · json · csv · srt · vtt
+  documents.py    Word and PDF, written directly (no extra dependency)
+  library.py      the saved transcripts, and searching them
   models.py       the local model catalog and its downloader
   dictionary.py   entries, and the hand-editable JSON behind them
   corrections.py  the correction pass and its risk analysis
@@ -391,7 +428,7 @@ src/aloud/
     tokens.py     the design system — the only file with values in it
     components.py token-driven building blocks
     main_window.py · history_view.py · dictionary_view.py
-    settings_window.py · models_window.py · transcript_window.py
+    settings_window.py · models_window.py · transcript_window.py · library_view.py
     menu_bar.py · app_menu.py · meter.py
     formatting.py presentation logic with no AppKit in it
 scripts/          bootstrap · model download · icon · app build

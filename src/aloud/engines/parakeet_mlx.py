@@ -78,12 +78,24 @@ class _MLXThread:
 
     def _run(self) -> None:
         while True:
-            fn, args, kwargs, outcome, done = self._work.get()
+            item = self._work.get()
+            if item is None:  # stop(): everything queued before it has run
+                return
+            fn, args, kwargs, outcome, done = item
             try:
                 outcome["value"] = fn(*args, **kwargs)
             except BaseException as exc:  # re-raised on the calling thread
                 outcome["error"] = exc
             done.set()
+            # Drop this item before blocking on the next one. Held over, the
+            # last result -- the model itself, after warm-up -- and the engine
+            # it belonged to stayed alive for as long as the thread did: a few
+            # GB leaked every time Settings replaced the engine.
+            del item, fn, args, kwargs, outcome, done
+
+    def stop(self) -> None:
+        """Finish whatever is queued, then end the thread."""
+        self._work.put(None)
 
     def call(self, fn, *args, **kwargs):
         if threading.current_thread() is self._thread:
@@ -168,6 +180,25 @@ class ParakeetMLXEngine(TranscriptionEngine):
             if self._mlx_thread is None:
                 self._mlx_thread = _MLXThread()
         return self._mlx_thread.call(fn, *args, **kwargs)
+
+    def close(self) -> None:
+        """Let go of the model and its thread, after any work in progress.
+
+        Called when Settings replaces this engine. The release is queued on
+        the MLX thread behind anything already running, so a transcription in
+        flight finishes normally first.
+        """
+        with self._mlx_thread_lock:
+            thread, self._mlx_thread = self._mlx_thread, None
+        if thread is None:
+            self._model = None
+            return
+
+        def release() -> None:
+            self._model = None
+
+        thread._work.put((release, (), {}, {}, threading.Event()))
+        thread.stop()
 
     def warm_up(self) -> None:
         """Load the model ahead of the first dictation, downloading if needed."""
@@ -319,13 +350,27 @@ class ParakeetMLXEngine(TranscriptionEngine):
         return value if value > 0 else DEFAULT_STREAM_CHUNK_SECONDS
 
     @staticmethod
-    def _chunks(samples, step: int) -> Iterator[list]:
+    def _chunks(samples, step: int) -> Iterator:
+        """Float chunks in -1.0..1.0, converted one at a time.
+
+        Converting the whole file up front held every sample as a Python
+        float -- about 32 bytes each, so ~1.8 GB for an hour of audio and
+        several GB for a long service. Only one chunk is ever converted now.
+        """
+        try:
+            import numpy as np
+        except ImportError:  # pragma: no cover - numpy ships with mlx
+            np = None
         for start in range(0, len(samples), step):
-            yield samples[start:start + step]
+            piece = samples[start:start + step]
+            if np is not None:
+                yield np.asarray(piece, dtype=np.float32) / FULL_SCALE
+            else:
+                yield [value / FULL_SCALE for value in piece]
 
     @staticmethod
     def _read_wav(wav_path: Path):
-        """16 kHz mono float samples in -1.0..1.0, plus the sample rate.
+        """16-bit mono samples (2 bytes each), plus the sample rate.
 
         Everything reaching an engine has been through ``media.prepare``, which
         makes 16-bit mono WAV, so this does not need to be a general decoder --
@@ -344,12 +389,17 @@ class ParakeetMLXEngine(TranscriptionEngine):
             raise _StreamingUnavailable(
                 f"expected 16-bit mono, got {width * 8}-bit {channels}-channel"
             )
+        if rate != 16000:
+            # The decoder is timed for 16 kHz; anything else would be read as
+            # sped-up or slowed-down speech. One pass resamples it properly.
+            raise _StreamingUnavailable(f"expected 16 kHz audio, got {rate} Hz")
 
         pcm = array.array("h")
         pcm.frombytes(frames)
+        del frames
         if sys.byteorder == "big":  # pragma: no cover - WAV is little-endian
             pcm.byteswap()
-        return [sample / FULL_SCALE for sample in pcm], rate
+        return pcm, rate
 
     # -- internals ---------------------------------------------------------
 

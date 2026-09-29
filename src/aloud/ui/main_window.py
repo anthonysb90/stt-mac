@@ -27,11 +27,12 @@ from . import tokens as T
 from .dictionary_view import DictionaryView
 from . import devices
 from .history_view import HistoryView
+from .library_view import LibraryView
 from .transcribe_view import TranscribeView
 from .formatting import db_label, shorten as media_label
 from .meter import LevelMeter
 
-HISTORY, DICTIONARY, TRANSCRIBE = 0, 1, 2
+HISTORY, TRANSCRIPTS, DICTIONARY, TRANSCRIBE = 0, 1, 2, 3
 
 STATE_COLOURS = {
     State.IDLE: T.STATUS_IDLE,
@@ -57,7 +58,7 @@ class _WindowDelegate(Foundation.NSObject):
 
 class MainWindow:
     def __init__(self, controller, on_settings: Callable,
-                 on_transcribe: Callable) -> None:
+                 on_transcribe: Callable, on_open_record: Callable = None) -> None:
         self.controller = controller
         self._on_settings = on_settings
         self._on_transcribe = on_transcribe
@@ -66,6 +67,7 @@ class MainWindow:
         self._has_been_placed = False
 
         self.history = HistoryView()
+        self.library = LibraryView(on_open=on_open_record or (lambda _record: None))
         self.dictionary = DictionaryView(
             controller.dictionary, on_changed=controller.reload_rules
         )
@@ -101,7 +103,7 @@ class MainWindow:
         target = C.action(lambda sender: self.show_pane(sender.selectedSegment()))
         self._keeper.append(target)
         control = AppKit.NSSegmentedControl.segmentedControlWithLabels_trackingMode_target_action_(
-            ["History", "Dictionary", "Transcribe"],
+            ["History", "Transcripts", "Dictionary", "Transcribe"],
             AppKit.NSSegmentSwitchTrackingSelectOne,
             target,
             b"invoke:",
@@ -224,8 +226,7 @@ class MainWindow:
         self._pane = index
         self.segments.setSelectedSegment_(index)
         C.clear(self.pane_host)
-        pane = {HISTORY: self.history, DICTIONARY: self.dictionary,
-                TRANSCRIBE: self.transcribe}[index]
+        pane = self._panes()[index]
         pane.reload()
         self.pane_host.addArrangedSubview_(pane.view)
         pane.view.widthAnchor().constraintEqualToAnchor_(
@@ -249,9 +250,18 @@ class MainWindow:
             self.meter.stop()
             self._stop_readout()
 
+    def _panes(self) -> dict:
+        return {HISTORY: self.history, TRANSCRIPTS: self.library,
+                DICTIONARY: self.dictionary, TRANSCRIBE: self.transcribe}
+
     def on_result(self) -> None:
-        if self._pane == HISTORY:
-            self.history.reload()
+        if self._pane in (HISTORY, TRANSCRIPTS):
+            self._panes()[self._pane].reload()
+
+    def on_library_changed(self) -> None:
+        """A transcript was renamed or its speakers named in its own window."""
+        if self._pane == TRANSCRIPTS:
+            self.library.reload()
 
     def on_dictionary_changed(self) -> None:
         if self._pane == DICTIONARY:
@@ -272,10 +282,15 @@ class MainWindow:
     def _start_readout(self) -> None:
         if getattr(self, "_readout_timer", None) is not None:
             return
-        target = C.action(lambda _sender: self.meter_readout.setStringValue_(
-            db_label(self.controller.level)
-        ))
-        self._keeper.append(target)
+        target = getattr(self, "_readout_target", None)
+        if target is None:
+            # Made once and reused: a new target per recording used to pile
+            # up in _keeper for as long as the app ran.
+            target = C.action(lambda _sender: self.meter_readout.setStringValue_(
+                db_label(self.controller.level)
+            ))
+            self._keeper.append(target)
+            self._readout_target = target
         self._readout_timer = AppKit.NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
             1.0 / T.METER_REFRESH_HZ, target, b"invoke:", None, True
         )
@@ -301,10 +316,10 @@ class MainWindow:
             self._has_been_placed = True
         self.window.makeKeyAndOrderFront_(None)
         AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
-        if self._pane == HISTORY:
-            self.history.reload()
-        else:
-            self.dictionary.reload()
+        # Reload whichever pane is showing. This used to reload the Dictionary
+        # for every pane but History, including when the Transcribe pane was
+        # the one on screen.
+        self._panes()[self._pane].reload()
 
     def _closed(self) -> None:
         # Closing the window must not stop dictation; the hotkey still works.

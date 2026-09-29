@@ -22,6 +22,8 @@ import shutil
 import wave
 import subprocess
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -109,8 +111,18 @@ def _wav_matches_target(path: Path) -> bool:
         return False
 
 
-def prepare(path: Path) -> Prepared:
-    """Normalise ``path`` to 16 kHz mono WAV, if we can and if it is needed."""
+#: How often a running conversion checks whether it has been cancelled.
+_POLL_SECONDS = 0.25
+
+
+def prepare(path: Path, cancel=None, timeout: Optional[float] = None) -> Prepared:
+    """Normalise ``path`` to 16 kHz mono WAV, if we can and if it is needed.
+
+    ``cancel`` is a threading.Event; setting it stops ffmpeg within a quarter
+    of a second. ffmpeg also gets a time limit scaled to the audio, because a
+    file on a network volume or an iCloud placeholder can stall it forever --
+    and everything else queued, dictation included, waits behind it.
+    """
     path = Path(path).expanduser()
     if not path.is_file():
         raise MediaError(f"No such file: {path}")
@@ -138,19 +150,62 @@ def prepare(path: Path) -> Prepared:
         str(target),
     ]
     log.debug("Converting: %s", " ".join(command))
+    if timeout is None:
+        # ffmpeg converts at hundreds of times real time; this only catches a stall.
+        timeout = 300.0 + duration_of(path) * 0.5
+    returncode, stderr = _run_cancellable(command, cancel, timeout, target, path)
+
+    if returncode != 0 or not target.exists() or target.stat().st_size == 0:
+        target.unlink(missing_ok=True)
+        tail = (stderr or "").strip().splitlines()
+        reason = tail[-1] if tail else f"exit code {returncode}"
+        raise MediaError(f"ffmpeg could not read {path.name}: {reason}")
+
+    return Prepared(path=target, temporary=True, converted=True, original=path)
+
+
+class Cancelled(MediaError):
+    """The conversion was stopped on request."""
+
+
+def _run_cancellable(command, cancel, timeout: float, target: Path, source: Path):
+    """Run ffmpeg, stopping it on cancel or timeout. Returns (code, stderr)."""
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        process = subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+        )
     except OSError as exc:
         target.unlink(missing_ok=True)
         raise MediaError(f"Could not run ffmpeg: {exc}") from exc
 
-    if completed.returncode != 0 or not target.exists() or target.stat().st_size == 0:
+    # stderr is drained on a thread: ffmpeg writes a progress line per second,
+    # and a full pipe would block it -- a stall of our own making.
+    chunks: list = []
+    reader = threading.Thread(
+        target=lambda: chunks.append(process.stderr.read()), daemon=True
+    )
+    reader.start()
+    deadline = time.monotonic() + timeout
+    try:
+        while process.poll() is None:
+            if cancel is not None and cancel.is_set():
+                raise Cancelled(f"Stopped converting {source.name}.")
+            if time.monotonic() > deadline:
+                raise MediaError(
+                    f"ffmpeg was still reading {source.name} after {timeout / 60:.0f} "
+                    "minutes and was stopped. If the file is on a network drive or "
+                    "in iCloud, copy it to this Mac first."
+                )
+            time.sleep(_POLL_SECONDS)
+    except MediaError:
+        process.kill()
+        process.wait()
         target.unlink(missing_ok=True)
-        tail = (completed.stderr or "").strip().splitlines()
-        reason = tail[-1] if tail else f"exit code {completed.returncode}"
-        raise MediaError(f"ffmpeg could not read {path.name}: {reason}")
-
-    return Prepared(path=target, temporary=True, converted=True, original=path)
+        raise
+    reader.join(5)
+    raw = chunks[0] if chunks else b""
+    return process.returncode, raw.decode("utf-8", "replace")
 
 
 @dataclass

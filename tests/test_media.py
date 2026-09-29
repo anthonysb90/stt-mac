@@ -18,6 +18,29 @@ def _wav(path: Path, seconds: float = 1.0, rate: int = 16000) -> Path:
     return path
 
 
+class _FakeProcess:
+    """What prepare() needs of a Popen, driven by a run()-style fake."""
+
+    def __init__(self, completed):
+        import io
+
+        self.returncode = completed.returncode
+        self.stderr = io.BytesIO((completed.stderr or "").encode())
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        pass
+
+    def wait(self):
+        return self.returncode
+
+
+def _popen_from(fake_run):
+    return lambda command, **_kwargs: _FakeProcess(fake_run(command))
+
+
 # -- what the open panel offers ---------------------------------------------
 
 
@@ -84,7 +107,7 @@ def test_conversion_asks_ffmpeg_for_16k_mono_pcm(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    monkeypatch.setattr(media.subprocess, "Popen", _popen_from(fake_run))
 
     prepared = media.prepare(source)
     command = seen["command"]
@@ -105,7 +128,7 @@ def test_a_converted_file_cleans_itself_up(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    monkeypatch.setattr(media.subprocess, "Popen", _popen_from(fake_run))
 
     prepared = media.prepare(source)
     assert prepared.path.exists()
@@ -122,7 +145,7 @@ def test_an_unreadable_file_reports_ffmpeg_s_own_reason(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 1, "", "Invalid data found when processing input")
 
     monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    monkeypatch.setattr(media.subprocess, "Popen", _popen_from(fake_run))
 
     with pytest.raises(media.MediaError, match="Invalid data"):
         media.prepare(source)
@@ -138,7 +161,7 @@ def test_an_empty_conversion_counts_as_a_failure(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    monkeypatch.setattr(media.subprocess, "Popen", _popen_from(fake_run))
 
     with pytest.raises(media.MediaError):
         media.prepare(source)
@@ -207,7 +230,7 @@ def test_a_mismatched_wav_is_converted_not_trusted(tmp_path, monkeypatch, kwargs
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    monkeypatch.setattr(media.subprocess, "Popen", _popen_from(fake_run))
     prepared = media.prepare(wav)
     assert converted.get("ran"), "ffmpeg must be asked to resample"
     assert prepared.converted and prepared.temporary
@@ -223,5 +246,44 @@ def test_a_wav_that_is_not_really_a_wav_is_converted(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(media, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(media.subprocess, "run", fake_run)
+    monkeypatch.setattr(media.subprocess, "Popen", _popen_from(fake_run))
     assert media.prepare(fake).converted
+
+
+# -- a conversion that stalls, or is cancelled ---------------------------------
+
+
+def _slow_ffmpeg(tmp_path):
+    """A stand-in ffmpeg that never finishes, like one reading a stalled drive."""
+    script = tmp_path / "ffmpeg"
+    script.write_text("#!/bin/sh\nsleep 30\n")
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_a_stalled_conversion_is_stopped_at_its_time_limit(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: _slow_ffmpeg(tmp_path))
+    source = tmp_path / "remote.m4a"
+    source.write_bytes(b"x")
+    started = time.monotonic()
+    with pytest.raises(media.MediaError, match="network drive"):
+        media.prepare(source, timeout=0.5)
+    assert time.monotonic() - started < 5
+    assert not list(Path(media.tempfile.gettempdir()).glob("aloud-import-*.wav.partial"))
+
+
+def test_a_conversion_can_be_cancelled(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: _slow_ffmpeg(tmp_path))
+    source = tmp_path / "long.m4a"
+    source.write_bytes(b"x")
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    started = time.monotonic()
+    with pytest.raises(media.Cancelled):
+        media.prepare(source, cancel=cancel, timeout=60)
+    assert time.monotonic() - started < 5

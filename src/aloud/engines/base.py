@@ -118,6 +118,13 @@ class TranscriptionEngine(abc.ABC):
     def warm_up(self) -> None:
         """Optional hook to pay one-off setup costs before the first use."""
 
+    def close(self) -> None:
+        """Release a loaded model. Called when this engine is replaced.
+
+        Must not interrupt a transcription already in progress; the default
+        does nothing, which is right for engines that hold no model.
+        """
+
     @property
     def api_key_env(self) -> str:
         """The environment variable this backend reads, if any."""

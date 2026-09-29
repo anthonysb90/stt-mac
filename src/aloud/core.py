@@ -25,6 +25,7 @@ Threading
 
 from __future__ import annotations
 
+import itertools
 import logging
 import queue
 import threading
@@ -55,6 +56,9 @@ class State(Enum):
     ERROR = "Error"
 
 
+_JOB_IDS = itertools.count(1)
+
+
 @dataclass
 class Job:
     """One unit of work for the transcription thread.
@@ -74,6 +78,15 @@ class Job:
     #: dictation is already recorded in the target format.
     prepare: bool = False
     cleanup: Optional[Any] = None
+    #: The file as the person chose it. ``audio`` is replaced by the converted
+    #: WAV during preparation; this keeps where it really came from.
+    original: Optional[Path] = None
+    #: Identifies the job to observers, so each file's window hears about its
+    #: own file -- two queued imports used to share one window slot.
+    id: int = field(default_factory=lambda: next(_JOB_IDS))
+    #: Set to stop this job. Per job, so Cancel pressed while a file is still
+    #: queued is not wiped out when the job ahead of it starts.
+    cancel: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -95,6 +108,14 @@ class Dictation:
     segments: List[Segment] = field(default_factory=list)
     #: The human-readable engine name, for the transcript window.
     engine_label: str = ""
+    #: Which job produced this, so a window can tell its result from another's.
+    job_id: int = 0
+    #: Something the person should know about an otherwise good result, such
+    #: as a cloud engine that stopped part-way and returned what it had.
+    warning: str = ""
+    #: The saved library copy of a file transcription (aloud.library.Record),
+    #: or None for dictation, or when saving it failed.
+    record: Optional[Any] = None
 
     @property
     def was_corrected(self) -> bool:
@@ -163,8 +184,13 @@ class DictationController:
         self._worker: Optional[threading.Thread] = None
         self._max_duration_timer: Optional[threading.Timer] = None
         self._last: Optional[Dictation] = None
-        self._cancel_current = threading.Event()
         self._stopping = threading.Event()
+        #: Guards every state transition. The worker finishing a job and the
+        #: hotkey starting a recording happen on different threads, and the
+        #: worker's "back to idle" used to land on top of RECORDING -- after
+        #: which the key release was ignored and the microphone stayed open.
+        self._state_lock = threading.RLock()
+        self._running: Optional[Job] = None
 
     # -- observers ---------------------------------------------------------
 
@@ -279,6 +305,10 @@ class DictationController:
             self.recorder.start()
         except AudioError as exc:
             log.error("%s", exc)
+            if self.listener is not None:
+                # Otherwise toggle mode thinks it is still "on", and the next
+                # tap is swallowed as a stop.
+                self.listener.reset()
             self._fail("Microphone unavailable", str(exc))
             return
         self._set_state(State.RECORDING)
@@ -289,22 +319,27 @@ class DictationController:
         if self.state is not State.RECORDING:
             return
         self._disarm_max_duration()
+        if self.listener is not None:
+            # Stopped from the button or the menu in toggle mode: without this
+            # the next hotkey tap is taken as "stop" and does nothing.
+            self.listener.reset()
         wav_path = self.recorder.stop()
         self.feedback.recording_stopped()
 
         if wav_path is None:
-            self._set_state(State.IDLE)
+            self._set_state(self._resting_state())
             return
 
         minimum = float(self.config.get("audio.min_seconds", 0.35))
         if wav_duration(wav_path) < minimum:
             log.debug("Discarding recording shorter than %.2fs", minimum)
             wav_path.unlink(missing_ok=True)
-            self._set_state(State.IDLE)
+            self._set_state(self._resting_state())
             return
 
-        self._set_state(State.TRANSCRIBING)
-        self._jobs.put(Job(audio=wav_path, deliver=True, source="microphone"))
+        with self._state_lock:
+            self._jobs.put(Job(audio=wav_path, deliver=True, source="microphone"))
+            self._set_state(State.TRANSCRIBING)
 
     def cancel_recording(self) -> None:
         """Abandon the current recording without transcribing it."""
@@ -314,7 +349,7 @@ class DictationController:
         self.recorder.cancel()
         if self.listener is not None:
             self.listener.reset()
-        self._set_state(State.IDLE)
+        self._set_state(self._resting_state())
 
     def _arm_max_duration(self) -> None:
         seconds = float(self.config.get("audio.max_seconds", 300))
@@ -347,12 +382,20 @@ class DictationController:
 
     def _run_job(self, job: "Job") -> None:
         """One job, start to finish, including tidying up after it."""
+        self._running = job
         try:
+            if job.cancel.is_set():
+                # Cancelled while it was still waiting in the queue.
+                log.info("Skipping %s: cancelled before it started", job.label or "a job")
+                self._settle()
+                self._emit("on_cancelled", job)
+                return
             self._transcribe_and_deliver(job)
         except Exception as exc:
             log.exception("Transcription pipeline failed")
-            self._fail("Transcription failed", str(exc))
+            self._fail("Transcription failed", str(exc), job=job)
         finally:
+            self._running = None
             if job.cleanup is not None:
                 try:
                     job.cleanup()
@@ -365,18 +408,24 @@ class DictationController:
     #: Tests drive one job at a time rather than starting the worker thread.
     _drain_one_for_test = _run_job
 
-    def cancel_import(self) -> None:
-        """Ask a running file transcription to stop at the next segment."""
-        self._cancel_current.set()
+    def cancel_import(self, job: Optional["Job"] = None) -> None:
+        """Stop a file transcription: ``job``, or whichever file is running.
+
+        A running job stops at its next progress report; a queued one is
+        skipped when its turn comes.
+        """
+        target = job if job is not None else self._running
+        if target is not None and target.source == "file":
+            target.cancel.set()
 
     def _transcribe_and_deliver(self, job: Job) -> None:
-        self._cancel_current.clear()
-
+        if job.original is None:
+            job.original = job.audio
         if job.prepare:
             # Emitted first so the progress window exists while ffmpeg runs;
             # "Reading the file…" is honest about what this stage is.
             self._emit("on_job_preparing", job)
-            prepared = media.prepare(job.audio)  # MediaError -> _run_job's catch
+            prepared = media.prepare(job.audio, cancel=job.cancel)  # MediaError -> _run_job
             job.audio = prepared.path
             job.cleanup = prepared.cleanup
             log.info(
@@ -393,7 +442,7 @@ class DictationController:
         # progress on it would cost more than it tells anyone.
         def report(text: str, done: float, total: float) -> bool:
             self._emit("on_progress", job, text, done, total)
-            return not self._cancel_current.is_set()
+            return not job.cancel.is_set()
 
         streaming = job.source == "file" and getattr(engine, "supports_progress", False)
         transcript = engine.transcribe(
@@ -410,15 +459,15 @@ class DictationController:
         segments = self._clean_segments(transcript.segments, options)
         elapsed = time.monotonic() - started
 
-        if self._cancel_current.is_set() and job.source == "file":
+        if job.cancel.is_set() and job.source == "file":
             log.info("Import of %s cancelled", job.label)
-            self._set_state(State.IDLE)
+            self._settle()
             self._emit("on_cancelled", job)
             return
 
         if not text:
             log.info("Nothing recognised in %s", job.label or "the recording")
-            self._set_state(State.IDLE)
+            self._settle()
             self._emit("on_empty", job)
             return
 
@@ -442,25 +491,71 @@ class DictationController:
             label=job.label,
             segments=segments,
             engine_label=getattr(engine, "label", transcript.engine),
+            job_id=job.id,
+            warning=str(transcript.meta.get("warning", "") or ""),
         )
+        if job.source == "file":
+            dictation.record = self._save_to_library(job, dictation, transcript, wav_path)
         self._last = dictation
 
         if self.config.get("history.enabled", True):
-            history.record(
-                text,
-                transcript.engine,
-                elapsed,
-                int(self.config.get("history.max_entries", 500)),
-                corrections=dictation.corrections,
-                raw=dictation.raw,
-            )
+            try:
+                history.record(
+                    text,
+                    transcript.engine,
+                    elapsed,
+                    int(self.config.get("history.max_entries", 500)),
+                    corrections=dictation.corrections,
+                    raw=dictation.raw,
+                )
+            except Exception:
+                # The history is a convenience; the transcript is the point.
+                # A history-file problem used to discard a finished hour-long
+                # file and report "Transcription failed".
+                log.exception("Could not write the history entry")
 
-        self._set_state(State.IDLE)
+        self._settle()
         self._emit("on_result", dictation)
+
+    def _save_to_library(self, job: "Job", dictation: "Dictation", transcript, wav_path: Path):
+        """Keep a finished file transcription in the library. Never raises.
+
+        A full disk or a permissions problem must cost the saved copy, not the
+        transcript the person is waiting to see — so failure is logged and the
+        window still shows the result, which can be exported from there.
+        """
+        if not self.config.get("library.enabled", True):
+            return None
+        from . import library
+
+        try:
+            seconds = wav_duration(wav_path) if wav_path.suffix.lower() == ".wav" else 0.0
+            if not seconds:
+                seconds = media.duration_of(job.original or wav_path)
+            record = library.Record(
+                title=library.title_from(job.label),
+                text=dictation.text,
+                raw_text=dictation.raw,
+                segments=list(dictation.segments),
+                source_name=job.label,
+                source_path=str(job.original or ""),
+                audio_seconds=seconds,
+                engine=transcript.engine,
+                engine_label=dictation.engine_label,
+                language=transcript.language or "",
+                transcribe_seconds=dictation.seconds,
+                corrections=list(dictation.corrections),
+            )
+            library.save(record)
+            log.info("Saved %s to the library at %s", job.label, record.folder)
+            return record
+        except Exception:
+            log.exception("Could not save %s to the library", job.label)
+            return None
 
     # -- importing a file --------------------------------------------------
 
-    def transcribe_file(self, path: Path) -> None:
+    def transcribe_file(self, path: Path) -> Optional["Job"]:
         """Queue an audio or video file for transcription.
 
         Converted to 16 kHz mono WAV where ffmpeg allows -- on the worker, not
@@ -470,7 +565,8 @@ class DictationController:
         catches the common mistake immediately.
 
         The result is *not* typed anywhere — it goes to the history and to
-        whoever is listening.
+        whoever is listening. Returns the queued job, so the caller can match
+        events to it, or None when the file was refused.
         """
         if self.state is State.RECORDING:
             # Refuse *without* touching state. Overwriting RECORDING orphaned
@@ -485,21 +581,18 @@ class DictationController:
                 "Finish dictating first",
                 "A file cannot be transcribed while the microphone is recording.",
             )
-            return
+            return None
 
         path = Path(path).expanduser()
         if not path.is_file():
             self._fail("Could not read that file", f"No such file: {path}")
-            return
+            return None
 
-        self._set_state(State.TRANSCRIBING)
-        self._jobs.put(Job(
-            audio=path,
-            deliver=False,
-            source="file",
-            label=path.name,
-            prepare=True,
-        ))
+        job = Job(audio=path, deliver=False, source="file", label=path.name, prepare=True)
+        with self._state_lock:
+            self._jobs.put(job)
+            self._set_state(State.TRANSCRIBING)
+        return job
 
     # -- cleanup and the dictionary ---------------------------------------
 
@@ -618,7 +711,9 @@ class DictationController:
     def reset_file_engine(self) -> None:
         """Drop the cached file engine so a changed model or key is re-read."""
         with self._file_engine_lock:
-            self._file_engine = None
+            old, self._file_engine = self._file_engine, None
+        if old is not None and old is not self.engine:
+            old.close()
 
     # -- input device ------------------------------------------------------
 
@@ -638,8 +733,13 @@ class DictationController:
         """Switch engines and pay the load cost now rather than mid-dictation."""
         self.config.set("engine", name)
         self.config.save()
+        old = self.engine
         self.engine = engines.select(self.config)
         self.reset_file_engine()
+        if old is not self.engine:
+            # Otherwise every change in Settings left the previous model --
+            # several GB for Parakeet -- in memory until the app quit.
+            old.close()
         log.info("Switched engine to %s (%s)", name, self.engine.name)
         threading.Thread(target=self.engine.warm_up, daemon=True).start()
         self._emit("on_state", self.state)
@@ -647,13 +747,51 @@ class DictationController:
     # -- state -------------------------------------------------------------
 
     def _set_state(self, state: State) -> None:
-        self.state = state
+        with self._state_lock:
+            self.state = state
         self._emit("on_state", state)
 
-    def _fail(self, title: str, message: str) -> None:
+    def _resting_state(self) -> State:
+        """IDLE, unless there is still work queued behind this."""
+        busy = self._jobs.qsize() > 0 or self._running is not None
+        return State.TRANSCRIBING if busy else State.IDLE
+
+    def _settle(self) -> None:
+        """Leave TRANSCRIBING once a job is done -- and never leave RECORDING.
+
+        The worker calls this when it finishes. If the hotkey went down while
+        it worked, the recording owns the state now: overwriting RECORDING was
+        how the key release came to be ignored and the microphone left open.
+        With more jobs queued it stays TRANSCRIBING, which is what the menu bar
+        should say while they run.
+        """
+        with self._state_lock:
+            if self.state is State.RECORDING:
+                return
+            state = State.TRANSCRIBING if self._jobs.qsize() > 0 else State.IDLE
+            self.state = state
+        self._emit("on_state", state)
+
+    def _fail(self, title: str, message: str, job: Optional["Job"] = None) -> None:
+        """Report a failure without ever disturbing a live recording.
+
+        A file's failure belongs to that file's window (``on_job_failed``); it
+        is not an alert, and it does not flash the app into ERROR.
+        """
         self.feedback.error()
-        self._set_state(State.ERROR)
+        if job is not None and job.source == "file":
+            self._settle()
+            self._emit("on_job_failed", job, title, message)
+            return
+        with self._state_lock:
+            recording = self.state is State.RECORDING
+            if not recording:
+                self.state = State.ERROR
+        if not recording:
+            self._emit("on_state", State.ERROR)
         self._emit("on_error", title, message)
+        if recording:
+            return
         recover = threading.Timer(3.0, self._recover_from_error)
         recover.daemon = True
         recover.start()
@@ -667,5 +805,9 @@ class DictationController:
         without stopping the recorder, leaving the microphone capturing until
         the app quit.
         """
-        if self.state is State.ERROR:
-            self._set_state(State.IDLE)
+        with self._state_lock:
+            if self.state is not State.ERROR:
+                return
+            self.state = self._resting_state()
+            state = self.state
+        self._emit("on_state", state)

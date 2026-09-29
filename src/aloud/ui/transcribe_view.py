@@ -8,12 +8,14 @@ button means the decision is informed rather than a surprise ten minutes later.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
 import AppKit
 
 from .. import media
+from ..mainthread import run_on_main
 from . import components as C
 from . import tokens as T
 
@@ -86,7 +88,28 @@ class TranscribeView:
     # -- selection ---------------------------------------------------------
 
     def select(self, path: Path) -> None:
-        info = media.inspect(path)
+        """Show the file at once, and its details as soon as they are read.
+
+        ffprobe runs on a background thread. It used to run right here, on the
+        main thread, with a 20-second timeout -- so a file on a slow network
+        drive froze every window, and did it again on every visit to this pane.
+        """
+        path = Path(path)
+        self._token = token = object()
+        self.zone_headline.setStringValue_(path.name)
+        self.zone_detail.setStringValue_("Reading the file…")
+        self.transcribe_button.setEnabled_(False)
+        self.clear_button.setHidden_(False)
+
+        def probe() -> None:
+            info = media.inspect(path)
+            run_on_main(lambda: self._show_info(info, token))
+
+        threading.Thread(target=probe, name="aloud-probe", daemon=True).start()
+
+    def _show_info(self, info: media.FileInfo, token) -> None:
+        if token is not getattr(self, "_token", None):
+            return  # another file was chosen while this one was being read
         self.selection = info
         self.zone_headline.setStringValue_(info.name)
         self.zone_detail.setStringValue_(
@@ -99,6 +122,7 @@ class TranscribeView:
 
     def clear(self) -> None:
         self.selection = None
+        self._token = None
         self.zone_headline.setStringValue_("Drop an audio or video file here")
         self.zone_detail.setStringValue_("mp3, m4a, wav, flac, or the audio from a video")
         self.transcribe_button.setEnabled_(False)
@@ -108,7 +132,11 @@ class TranscribeView:
     def start(self) -> None:
         if self.selection is None or not self.selection.supported:
             return
-        self._on_transcribe(self.selection.path)
+        path = self.selection.path
+        # Cleared straight away: the work has its own window now, and a second
+        # click on a still-armed button would transcribe the same file twice.
+        self.clear()
+        self._on_transcribe(path)
 
     # -- details -----------------------------------------------------------
 
@@ -138,6 +166,12 @@ class TranscribeView:
     # -- called by the window ---------------------------------------------
 
     def reload(self) -> None:
-        """Re-read the selected file, in case it changed on disk."""
-        if self.selection is not None:
+        """Re-read the selected file, but only if it changed on disk."""
+        if self.selection is None:
+            return
+        try:
+            changed = self.selection.path.stat().st_mtime != self.selection.modified
+        except OSError:
+            changed = True
+        if changed:
             self.select(self.selection.path)

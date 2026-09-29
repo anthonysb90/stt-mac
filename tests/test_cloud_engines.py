@@ -317,3 +317,47 @@ def test_cloud_engines_have_config_defaults():
     for name in ("groq", "assemblyai", "elevenlabs"):
         assert name in DEFAULTS["engines"], name
         assert DEFAULTS["engines"][name]["api_key_env"]
+
+
+# -- resilience -----------------------------------------------------------------
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    monkeypatch.setattr("aloud.engines._http.BACKOFF", (0.0,))
+
+
+def test_a_rate_limit_or_server_error_is_retried(server, monkeypatch, tmp_path, no_wait):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    replies = iter([(503, {"error": "busy"}), (429, {"error": "slow down"}),
+                    (200, openai_reply("Made it.", []))])
+    server.routes[("POST", "/v1/audio/transcriptions")] = lambda _r: next(replies)
+    engine = build("groq", {"base_url": server.url + "/v1"})
+    assert engine.transcribe(wav(tmp_path / "a.wav", 1)).text == "Made it."
+    assert len(server.requests) == 3
+
+
+def test_a_bad_key_is_not_retried(server, monkeypatch, tmp_path, no_wait):
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    server.routes[("POST", "/v1/audio/transcriptions")] = (401, {"error": "no"})
+    with pytest.raises(EngineError):
+        build("groq", {"base_url": server.url + "/v1"}).transcribe(wav(tmp_path / "a.wav", 1))
+    assert len(server.requests) == 1
+
+
+def test_a_chunk_that_keeps_failing_keeps_the_chunks_before_it(server, monkeypatch, tmp_path, no_wait):
+    """Forty paid-for minutes must not vanish because minute forty-one failed."""
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    replies = iter([(200, openai_reply("Kept.", [(0.0, 2.0, "Kept.")]))] + [(500, {})] * 5)
+    server.routes[("POST", "/v1/audio/transcriptions")] = lambda _r: next(replies)
+    engine = build("openai", {"base_url": server.url + "/v1", "chunk_seconds": 10})
+    transcript = engine.transcribe(wav(tmp_path / "a.wav", 25))
+    assert transcript.text == "Kept."
+    assert "0:00:10" in transcript.meta["warning"]
+
+
+def test_a_first_chunk_failure_is_still_an_error(server, monkeypatch, tmp_path, no_wait):
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    server.routes[("POST", "/v1/audio/transcriptions")] = (500, {})
+    with pytest.raises(EngineError):
+        build("openai", {"base_url": server.url + "/v1"}).transcribe(wav(tmp_path / "a.wav", 1))

@@ -124,7 +124,7 @@ def test_progress_is_reported_from_the_file_engine(app, timed, tmp_path):
 def test_an_unknown_file_engine_fails_the_file_not_the_app(app, tmp_path):
     app.config.set("file_engine", "no_such_engine")
     errors = []
-    app.add_observer(type("E", (), {"on_error": lambda _s, t, m: errors.append(m)})())
+    app.add_observer(type("E", (), {"on_job_failed": lambda _s, j, t, m: errors.append(m)})())
     app._drain_one_for_test(file_job(_silent_wav(tmp_path / "talk.wav")))
     assert errors and "no_such_engine" in errors[0]
 
@@ -212,3 +212,68 @@ def test_faster_whisper_keeps_segment_timings(tmp_path, monkeypatch):
     assert transcript.text == "Hello. Bye."
     assert [(s.start, s.end, s.text) for s in transcript.segments] == [
         (0.0, 1.0, "Hello."), (2.0, 2.5, "Bye.")]
+
+
+# -- memory: long files, and replaced engines ----------------------------------
+
+
+def test_parakeet_holds_samples_as_16_bit_not_python_floats(tmp_path):
+    """An hour as Python floats was ~1.8 GB; as 16-bit samples it is ~115 MB."""
+    import array
+
+    from aloud.engines.parakeet_mlx import ParakeetMLXEngine
+
+    samples, rate = ParakeetMLXEngine._read_wav(_silent_wav(tmp_path / "a.wav", seconds=2))
+    assert isinstance(samples, array.array) and samples.typecode == "h"
+    assert rate == 16000 and len(samples) == 32000
+    chunks = list(ParakeetMLXEngine._chunks(samples, 16000))
+    assert len(chunks) == 2 and len(chunks[0]) == 16000
+    assert all(-1.0 <= float(v) <= 1.0 for v in list(chunks[0])[:10])
+
+
+def test_parakeet_will_not_stream_audio_at_the_wrong_rate(tmp_path):
+    from aloud.engines.parakeet_mlx import ParakeetMLXEngine, _StreamingUnavailable
+
+    with pytest.raises(_StreamingUnavailable, match="16 kHz"):
+        ParakeetMLXEngine._read_wav(_silent_wav(tmp_path / "a.wav", rate=44100))
+
+
+def test_the_mlx_thread_lets_go_of_its_last_result():
+    """It used to keep the model alive after warm-up, and so every old engine."""
+    import gc
+    import weakref
+
+    from aloud.engines.parakeet_mlx import _MLXThread
+
+    class Model:
+        pass
+
+    thread = _MLXThread()
+    model = thread.call(Model)
+    ref = weakref.ref(model)
+    thread.call(lambda: None)  # the thread is now waiting for more work
+    del model
+    gc.collect()
+    assert ref() is None
+    thread.stop()
+    thread._thread.join(2)
+    assert not thread._thread.is_alive()
+
+
+def test_replacing_the_engine_releases_the_old_one(app, monkeypatch):
+    monkeypatch.setattr("aloud.core.threading.Thread.start", lambda self: None)
+    closed = []
+    old = app.engine
+    monkeypatch.setattr(old, "close", lambda: closed.append(old), raising=False)
+    app.use_engine("mock")
+    assert closed == [old] and app.engine is not old
+
+
+def test_replacing_the_file_engine_releases_it_but_not_the_dictation_engine(app, timed):
+    app.use_file_engine("timed")
+    file_engine = app.files_engine()
+    closed = []
+    file_engine.close = lambda: closed.append("file")
+    app.engine.close = lambda: closed.append("dictation")
+    app.reset_file_engine()
+    assert closed == ["file"]

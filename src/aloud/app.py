@@ -32,6 +32,7 @@ from .paths import LOG_FILE
 from .ui import app_menu
 from .ui import dock
 from .ui import transcript_window
+from .ui import main_window as main_window_module
 from .ui.main_window import MainWindow
 from .ui.menu_bar import MenuBarItem
 from .ui.models_window import ModelsWindow
@@ -54,7 +55,8 @@ class AloudDelegate(Foundation.NSObject):
         self.models_window = None
         self.menu_bar = None
         self._transcript_windows = []
-        self._import_window = None
+        #: job id -> the window watching that file
+        self._import_windows = {}
         return self
 
     # -- lifecycle ---------------------------------------------------------
@@ -83,6 +85,7 @@ class AloudDelegate(Foundation.NSObject):
             self.controller,
             on_settings=self.showSettings_,
             on_transcribe=self._begin_import,
+            on_open_record=self._open_record,
         )
         self.models_window = ModelsWindow(self.controller, on_changed=self._models_changed)
         self.settings = SettingsWindow(
@@ -176,30 +179,76 @@ class AloudDelegate(Foundation.NSObject):
         """Open the progress window first, then start the work.
 
         In that order because preparing the file can itself fail, and a failure
-        with nowhere to appear is how you get a silent no-op.
+        with nowhere to appear is how you get a silent no-op. Each job gets its
+        own window, matched by the job's id: with one shared slot, a second
+        file started while the first was running took over the first one's
+        window and left it spinning on "Reading the file…" for good.
         """
-        window = transcript_window.TranscriptWindow(
-            path.name, on_cancel=self.controller.cancel_import
+        holder = {}
+        window = self._new_transcript_window(
+            path.name, on_cancel=lambda: self.controller.cancel_import(holder.get("job"))
         )
-        self._import_window = window
+        window.show()
+        window.begin("Waiting for the work ahead of it to finish…"
+                     if self.controller.state is State.TRANSCRIBING else "Reading the file…")
+        job = self.controller.transcribe_file(path)
+        if job is None:
+            # Refused (recording, or no such file); the reason is in an alert.
+            window.window.close()
+            return
+        holder["job"] = job
+        self._import_windows[job.id] = window
+
+    @objc.python_method
+    def _new_transcript_window(self, title, on_cancel=None):
+        """Make a transcript window, and let go of the ones already closed."""
+        self._transcript_windows = [
+            w for w in self._transcript_windows
+            if w.window.isVisible() or not w.finished
+        ]
+        window = transcript_window.TranscriptWindow(
+            title, on_cancel=on_cancel, on_changed=self._library_changed
+        )
+        self._transcript_windows.append(window)
+        return window
+
+    @objc.python_method
+    def _open_record(self, record) -> None:
+        """Open a saved transcript from the Transcripts pane."""
+        for existing in self._transcript_windows:
+            if existing.record is not None and existing.record.id == record.id:
+                existing.window.makeKeyAndOrderFront_(None)
+                return
+        self._transcript_windows = [
+            w for w in self._transcript_windows if w.window.isVisible() or not w.finished
+        ]
+        window = transcript_window.TranscriptWindow.for_record(
+            record, on_changed=self._library_changed
+        )
         self._transcript_windows.append(window)
         window.show()
-        window.begin("Reading the file…")
-        self.controller.transcribe_file(path)
+
+    @objc.python_method
+    def _library_changed(self) -> None:
+        if self.main_window is not None:
+            self.main_window.on_library_changed()
+
+    @objc.python_method
+    def _window_for(self, job):
+        if getattr(job, "source", "") != "file":
+            return None
+        return self._import_windows.get(job.id)
 
     @objc.python_method
     def on_job_preparing(self, job) -> None:
-        window = self._import_window
-        if job.source != "file" or window is None:
-            return
-        run_on_main(lambda: window.begin("Converting with ffmpeg…"))
+        window = self._window_for(job)
+        if window is not None:
+            run_on_main(lambda: window.begin("Converting with ffmpeg…"))
 
     @objc.python_method
     def on_job_started(self, job) -> None:
-        # Snapshot: the deferred block must not re-read self._import_window,
-        # which another callback can null out before the main queue gets here.
-        window = self._import_window
-        if job.source != "file" or window is None:
+        window = self._window_for(job)
+        if window is None:
             return
         engine = self.controller.engine_for(job)
         streaming = getattr(engine, "supports_progress", False)
@@ -211,15 +260,13 @@ class AloudDelegate(Foundation.NSObject):
 
     @objc.python_method
     def on_progress(self, job, text, done, total) -> None:
-        if job.source != "file" or self._import_window is None:
-            return
-        window = self._import_window
-        run_on_main(lambda: window.update(text, done, total))
+        window = self._window_for(job)
+        if window is not None:
+            run_on_main(lambda: window.update(text, done, total))
 
     @objc.python_method
     def on_cancelled(self, job) -> None:
-        window = self._import_window
-        self._import_window = None
+        window = self._import_windows.pop(getattr(job, "id", None), None)
         if window is not None:
             run_on_main(window.cancelled)
 
@@ -232,30 +279,32 @@ class AloudDelegate(Foundation.NSObject):
         self.main_window.on_result()
         if dictation.source != "file":
             return
-        window, self._import_window = self._import_window, None
+        window = self._import_windows.pop(dictation.job_id, None)
         if window is None:
             # Started from somewhere without a window — give it one.
-            window = transcript_window.TranscriptWindow(dictation.label or "Transcript")
-            self._transcript_windows.append(window)
+            window = self._new_transcript_window(dictation.label or "Transcript")
             window.show()
         window.finish(dictation)
 
     @objc.python_method
     def on_empty(self, job) -> None:
-        if job.source != "file":
-            return
-        window, self._import_window = self._import_window, None
+        window = self._import_windows.pop(getattr(job, "id", None), None)
         if window is not None:
             run_on_main(lambda: window.fail(f"No speech was recognised in {job.label}."))
 
     @objc.python_method
-    def on_error(self, title: str, message: str) -> None:
-        window, self._import_window = self._import_window, None
+    def on_job_failed(self, job, title: str, message: str) -> None:
+        """A file failed: say so in its own window, not in an alert."""
+        window = self._import_windows.pop(getattr(job, "id", None), None)
         if window is not None:
-            # An import failure belongs in the window watching that import,
-            # not in a modal alert on top of it.
             run_on_main(lambda: window.fail(f"{title}: {message}"))
-            return
+        else:
+            run_on_main(lambda: self._alert(title, message))
+
+    @objc.python_method
+    def on_error(self, title: str, message: str) -> None:
+        # Dictation and app-wide problems only; a file's failure arrives as
+        # on_job_failed and goes to that file's window.
         run_on_main(lambda: self._alert(title, message))
 
     @objc.python_method
@@ -297,11 +346,15 @@ class AloudDelegate(Foundation.NSObject):
 
     def showHistory_(self, _sender):
         self.main_window.show()
-        self.main_window.show_pane(0)
+        self.main_window.show_pane(main_window_module.HISTORY)
+
+    def showTranscripts_(self, _sender):
+        self.main_window.show()
+        self.main_window.show_pane(main_window_module.TRANSCRIPTS)
 
     def showDictionary_(self, _sender):
         self.main_window.show()
-        self.main_window.show_pane(1)
+        self.main_window.show_pane(main_window_module.DICTIONARY)
 
     def transcribeFile_(self, _sender):
         """File > Transcribe Audio File… — the menu route into the same flow."""
@@ -441,7 +494,9 @@ class AloudDelegate(Foundation.NSObject):
         if selector == b"copyLast:":
             return self.controller.last is not None
         if selector == b"transcribeFile:":
-            return self.controller.state is not State.TRANSCRIBING
+            # Files queue now, each in its own window; only a live recording
+            # refuses one.
+            return self.controller.state is not State.RECORDING
         return True
 
     # -- helpers -----------------------------------------------------------

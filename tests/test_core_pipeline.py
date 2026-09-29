@@ -266,6 +266,7 @@ class Recorder:
         self.states = []
         self.results = []
         self.errors = []
+        self.job_failures = []
 
     def on_state(self, state):
         self.states.append(state)
@@ -275,6 +276,9 @@ class Recorder:
 
     def on_error(self, title, message):
         self.errors.append((title, message))
+
+    def on_job_failed(self, job, title, message):
+        self.job_failures.append((job, title, message))
 
 
 def test_observers_see_the_state_machine(app, tmp_path):
@@ -357,7 +361,7 @@ def test_an_imported_file_is_never_typed_into_the_focused_app(app, tmp_path, mon
     document happens to be open.
     """
     source = _silent_wav(tmp_path / "meeting.wav", seconds=2)
-    monkeypatch.setattr("aloud.media.prepare", lambda p: _prepared(source))
+    monkeypatch.setattr("aloud.media.prepare", lambda p, **_k: _prepared(source))
 
     app.transcribe_file(source)
     job = app._jobs.get()
@@ -373,7 +377,7 @@ def test_an_imported_file_still_reaches_the_history_and_observers(app, tmp_path,
     from aloud import history
 
     source = _silent_wav(tmp_path / "memo.wav", seconds=2)
-    monkeypatch.setattr("aloud.media.prepare", lambda p: _prepared(source))
+    monkeypatch.setattr("aloud.media.prepare", lambda p, **_k: _prepared(source))
     watcher = Recorder()
     app.add_observer(watcher)
 
@@ -395,7 +399,7 @@ def test_a_converted_file_is_cleaned_up_afterwards(app, tmp_path, monkeypatch):
 
     prepared = _prepared(converted, converted=True, temporary=True)
     monkeypatch.setattr(prepared, "cleanup", lambda: removed.append(converted))
-    monkeypatch.setattr("aloud.media.prepare", lambda p: prepared)
+    monkeypatch.setattr("aloud.media.prepare", lambda p, **_k: prepared)
 
     app.transcribe_file(original)
     job = app._jobs.get()
@@ -413,7 +417,7 @@ def test_an_unreadable_file_reports_instead_of_crashing(app, tmp_path, monkeypat
     """Conversion now happens on the worker, so its failure surfaces there."""
     from aloud.media import MediaError
 
-    def explode(_path):
+    def explode(_path, **_kwargs):
         raise MediaError("ffmpeg could not read broken.mp3: Invalid data")
 
     monkeypatch.setattr("aloud.media.prepare", explode)
@@ -424,8 +428,13 @@ def test_an_unreadable_file_reports_instead_of_crashing(app, tmp_path, monkeypat
     broken.write_bytes(b"not audio")
     app.transcribe_file(broken)
     assert app._jobs.qsize() == 1, "queued; the conversion has not run yet"
-    app._drain_one_for_test(app._jobs.get())
-    assert watcher.errors and "Invalid data" in watcher.errors[0][1]
+    job = app._jobs.get()
+    app._drain_one_for_test(job)
+    # Reported to that file's window, not as an app-wide alert.
+    assert not watcher.errors
+    assert watcher.job_failures and watcher.job_failures[0][0] is job
+    assert "Invalid data" in watcher.job_failures[0][2]
+    assert app.state is State.IDLE
 
 
 def test_a_missing_file_is_refused_before_queueing(app, tmp_path):
@@ -488,7 +497,7 @@ def test_file_conversion_runs_on_the_worker_not_the_caller(app, tmp_path, monkey
     """transcribe_file() is called from the main thread; ffmpeg is not quick."""
     calls = []
 
-    def fake_prepare(path):
+    def fake_prepare(path, **_kwargs):
         calls.append(path)
         from aloud.media import Prepared
         wav = _silent_wav(tmp_path / "prepared.wav")
@@ -603,3 +612,82 @@ def test_start_arms_the_permission_watcher():
         if isinstance(n, ast.FunctionDef) and n.name == "start"
     )
     assert "_watch_for_accessibility" in ast.unparse(node)
+
+
+# -- a job finishing while the next dictation is being recorded ---------------
+
+
+def test_a_finishing_job_never_overrides_a_live_recording(app, tmp_path):
+    """The worker used to set IDLE on top of RECORDING.
+
+    The key release then saw IDLE and returned without stopping the recorder:
+    the microphone stayed open, and the next dictation pasted everything said
+    in between.
+    """
+    app.begin_recording()
+    app.finish_recording()
+    job = app._jobs.get_nowait()
+    app.recorder.wav_path = _silent_wav(tmp_path / "second.wav")
+    app.begin_recording()  # pressed again while the first is transcribing
+    app._run_job(job)       # the first finishes
+    assert app.state is State.RECORDING
+    app.finish_recording()  # released
+    assert not app.recorder.recording
+    assert app._jobs.qsize() == 1
+
+
+def test_a_failing_job_never_overrides_a_live_recording(app, tmp_path, monkeypatch):
+    app.begin_recording()
+    app.finish_recording()
+    job = app._jobs.get_nowait()
+    app.recorder.wav_path = _silent_wav(tmp_path / "second.wav")
+    app.begin_recording()
+    monkeypatch.setattr(app.engine, "transcribe", lambda *_a, **_k: 1 / 0)
+    app._run_job(job)
+    assert app.state is State.RECORDING
+    app.finish_recording()
+    assert not app.recorder.recording
+
+
+def test_the_state_stays_transcribing_while_work_is_queued(app, tmp_path):
+    a = app.transcribe_file(_silent_wav(tmp_path / "a.wav"))
+    b = app.transcribe_file(_silent_wav(tmp_path / "b.wav"))
+    app._run_job(app._jobs.get_nowait())
+    assert app.state is State.TRANSCRIBING, "b is still waiting"
+    app._run_job(app._jobs.get_nowait())
+    assert app.state is State.IDLE
+    assert a.id != b.id
+
+
+def test_cancelling_a_queued_file_skips_it(app, tmp_path):
+    cancelled = []
+    app.add_observer(type("C", (), {"on_cancelled": lambda _s, j: cancelled.append(j)})())
+    first = app.transcribe_file(_silent_wav(tmp_path / "a.wav"))
+    second = app.transcribe_file(_silent_wav(tmp_path / "b.wav"))
+    app.cancel_import(second)  # pressed while it waits behind the first
+    app._run_job(app._jobs.get_nowait())
+    app._run_job(app._jobs.get_nowait())
+    assert cancelled == [second]
+    assert not first.cancel.is_set()
+
+
+def test_toggle_mode_is_reset_when_stopped_from_the_button(app):
+    class Listener:
+        resets = 0
+
+        def reset(self):
+            Listener.resets += 1
+
+    app.listener = Listener()
+    app.begin_recording()
+    app.finish_recording()
+    assert Listener.resets == 1
+
+
+def test_a_history_failure_does_not_lose_the_transcript(app, tmp_path, monkeypatch):
+    watcher = Recorder()
+    app.add_observer(watcher)
+    monkeypatch.setattr("aloud.history.record", lambda *a, **k: (_ for _ in ()).throw(
+        UnicodeDecodeError("utf-8", b"", 0, 1, "bad")))
+    app._run_job(Job(audio=_silent_wav(tmp_path / "d.wav"), deliver=True))
+    assert watcher.results and not watcher.errors

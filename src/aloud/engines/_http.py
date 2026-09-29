@@ -8,7 +8,9 @@ want different advice — so this only moves bytes and decodes JSON.
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -17,7 +19,24 @@ from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 from .base import EngineError
 
+log = logging.getLogger(__name__)
+
 Field = Tuple[str, str]
+
+#: Worth another try: rate limits and the server's own failures.
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+#: Seconds to wait before each retry. Short: someone is watching a window.
+BACKOFF = (2.0, 6.0, 15.0)
+
+
+def _pause(attempt: int, retry_after) -> None:
+    delay = BACKOFF[min(attempt, len(BACKOFF) - 1)]
+    try:
+        if retry_after:
+            delay = min(float(retry_after), 60.0)
+    except ValueError:
+        pass
+    time.sleep(delay)
 
 
 def multipart(
@@ -71,22 +90,41 @@ def request_json(
     timeout: float = 30.0,
     explain=None,
     service: str = "the service",
+    retries: int = 2,
 ) -> Any:
     """Send a request and decode the JSON reply.
 
     ``explain(code, body)`` turns an HTTP error into a sentence worth showing;
     without it the status and the start of the body are shown instead.
+
+    A dropped connection, a rate limit (429) or a server error (5xx) is tried
+    again, twice by default, after a short wait. One Wi-Fi blip forty minutes
+    into a long file used to throw the whole transcription away; a real
+    refusal (a bad key, an unsupported file) still fails at once.
     """
-    request = urllib.request.Request(url, data=data, method=method, headers=headers or {})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "replace")[:400]
-        message = explain(exc.code, body) if explain else None
-        raise EngineError(message or f"HTTP {exc.code} from {service}: {body}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise EngineError(f"Could not reach {service}: {exc}") from exc
+    raw = ""
+    for attempt in range(retries + 1):
+        request = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+            break
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:400]
+            if exc.code in RETRY_STATUSES and attempt < retries:
+                log.info("%s answered %d; retrying (%d of %d)", service, exc.code,
+                         attempt + 1, retries)
+                _pause(attempt, exc.headers.get("Retry-After") if exc.headers else None)
+                continue
+            message = explain(exc.code, body) if explain else None
+            raise EngineError(message or f"HTTP {exc.code} from {service}: {body}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt < retries:
+                log.info("Could not reach %s (%s); retrying (%d of %d)", service, exc,
+                         attempt + 1, retries)
+                _pause(attempt, None)
+                continue
+            raise EngineError(f"Could not reach {service}: {exc}") from exc
     try:
         return json.loads(raw) if raw.strip() else {}
     except json.JSONDecodeError as exc:

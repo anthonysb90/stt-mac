@@ -478,6 +478,27 @@ def text_field(value: str, placeholder: str = "", handler: Optional[Callable] = 
     return field
 
 
+def title_field(value: str, handler: Callable, keeper: list) -> AppKit.NSTextField:
+    """A heading you can click and retype — a transcript's title.
+
+    Looks like a heading until clicked; Return or clicking away commits.
+    """
+    field = AppKit.NSTextField.alloc().init()
+    field.setStringValue_(value)
+    field.setPlaceholderString_("Title")
+    field.setFont_(T.ns_font(T.TYPE_TITLE_2))
+    field.setTextColor_(T.ns_color(T.TEXT_PRIMARY))
+    field.setBezeled_(False)
+    field.setDrawsBackground_(False)
+    field.setFocusRingType_(AppKit.NSFocusRingTypeExterior)
+    field.setTranslatesAutoresizingMaskIntoConstraints_(False)
+    target = action(handler)
+    keeper.append(target)
+    field.setTarget_(target)
+    field.setAction_(b"invoke:")
+    return field
+
+
 def secure_field(placeholder: str = "", handler: Optional[Callable] = None,
                  keeper: Optional[list] = None) -> AppKit.NSSecureTextField:
     """A masked text field, for pasting a key without it sitting on screen."""
@@ -607,16 +628,44 @@ def progress_bar(indeterminate: bool = True) -> AppKit.NSProgressIndicator:
     return bar
 
 
+#: "As large as needed" for a text view's size limits. AppKit's own examples
+#: use FLT_MAX; this is the same idea without the float edge cases.
+_UNBOUNDED = 1.0e7
+
+
 def text_view(text: str, style: T.TextStyle = T.TYPE_TRANSCRIPT) -> AppKit.NSTextView:
-    """Read-only, selectable, scrollable text — a whole transcript's worth."""
-    view = AppKit.NSTextView.alloc().init()
+    """Read-only, selectable, scrollable text — a whole transcript's worth.
+
+    Built the way AppKit's "text in a scroll view" recipe requires. The old
+    version was a bare ``init()``: a zero-sized view with no rule for growing,
+    so the text laid out into a column with no width and could not be properly
+    selected or copied. The view must track the scroll view's width, grow
+    vertically without limit, and let its text container follow its width.
+
+    The find bar is on: ⌘F searches the transcript, ⌘G steps through matches.
+    """
+    view = AppKit.NSTextView.alloc().initWithFrame_(
+        ((0, 0), (T.METRIC["window_width_min"], T.METRIC["window_height_min"]))
+    )
+    view.setMinSize_((0.0, 0.0))
+    view.setMaxSize_((_UNBOUNDED, _UNBOUNDED))
+    view.setVerticallyResizable_(True)
+    view.setHorizontallyResizable_(False)
+    view.setAutoresizingMask_(AppKit.NSViewWidthSizable)
+    container = view.textContainer()
+    container.setContainerSize_((T.METRIC["window_width_min"], _UNBOUNDED))
+    container.setWidthTracksTextView_(True)
+
     view.setString_(text)
     view.setEditable_(False)
     view.setSelectable_(True)
+    view.setRichText_(False)
     view.setDrawsBackground_(False)
     view.setFont_(T.ns_font(style))
     view.setTextColor_(T.ns_color(T.TEXT_PRIMARY))
     view.setTextContainerInset_((T.SPACE["md"], T.SPACE["md"]))
+    view.setUsesFindBar_(True)
+    view.setIncrementalSearchingEnabled_(True)
     return view
 
 
@@ -624,10 +673,26 @@ def text_scroller(document: AppKit.NSView) -> AppKit.NSScrollView:
     """A scroll view for a text view, which manages its own document width."""
     view = AppKit.NSScrollView.alloc().init()
     view.setHasVerticalScroller_(True)
+    view.setHasHorizontalScroller_(False)
+    view.setAutohidesScrollers_(True)
     view.setDrawsBackground_(False)
     view.setBorderType_(AppKit.NSNoBorder)
     view.setTranslatesAutoresizingMaskIntoConstraints_(False)
     view.setDocumentView_(document)
+    # The find bar attaches to the scroll view that holds the text.
+    view.setFindBarPosition_(AppKit.NSScrollViewFindBarPositionAboveContent)
+    return view
+
+
+def fit_to_content(view: AppKit.NSView) -> AppKit.NSView:
+    """Give a constraint-built view a frame, for AppKit hosts that use frames.
+
+    Save panels and alerts lay out their accessory view by frame; handed one
+    built with constraints only, they can collapse it to nothing.
+    """
+    view.layoutSubtreeIfNeeded()
+    view.setTranslatesAutoresizingMaskIntoConstraints_(True)
+    view.setFrameSize_(view.fittingSize())
     return view
 
 
@@ -684,9 +749,9 @@ __all__ = [
     "Action", "DropZone", "TokenBox", "action", "button", "card", "checkbox",
     "MenuRefresher", "clear", "drop_surface", "drop_zone", "menu_item",
     "refreshing_menu",
-    "empty_state", "highlighted_text", "icon_button", "label", "pad", "pill",
+    "empty_state", "fit_to_content", "highlighted_text", "icon_button", "label", "pad", "pill",
     "menu_popup", "popup", "progress_bar", "scroller", "search_field", "selectable_text",
     "separator",
-    "secure_field", "spacer", "stack", "text_field", "text_scroller",
+    "secure_field", "spacer", "title_field", "stack", "text_field", "text_scroller",
     "text_view", "well",
 ]

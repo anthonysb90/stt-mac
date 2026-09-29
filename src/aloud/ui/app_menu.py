@@ -19,6 +19,10 @@ import AppKit
 from .. import APP_NAME
 
 
+#: NSTextFinderAction values, from NSTextFinder.h.
+FIND_SHOW, FIND_NEXT, FIND_PREVIOUS, FIND_USE_SELECTION = 1, 2, 3, 7
+
+
 def _item(title: str, selector: bytes, key: str = "",
           modifiers=None, target=None) -> AppKit.NSMenuItem:
     item = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, key)
@@ -105,11 +109,23 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
     edit.addItem_(_item("Paste", b"paste:", "v"))
     edit.addItem_(_item("Select All", b"selectAll:", "a"))
     edit.addItem_(AppKit.NSMenuItem.separatorItem())
-    edit.addItem_(_item("Find", b"performTextFinderAction:", "f"))
+    # performTextFinderAction: does nothing without a tag saying *which*
+    # action -- the old untagged item made ⌘F silently inert. The tags are
+    # NSTextFinderAction values.
+    for title, key, tag, shift in (
+        ("Find…", "f", FIND_SHOW, False),
+        ("Find Next", "g", FIND_NEXT, False),
+        ("Find Previous", "g", FIND_PREVIOUS, True),
+        ("Use Selection for Find", "e", FIND_USE_SELECTION, False),
+    ):
+        item = _item(title, b"performTextFinderAction:", key.upper() if shift else key)
+        item.setTag_(tag)
+        edit.addItem_(item)
 
     # --- View --------------------------------------------------------------
     view = _submenu(main, "View")
     view.addItem_(_item("History", b"showHistory:", "1", target=target))
+    view.addItem_(_item("Transcripts", b"showTranscripts:", "3", target=target))
     view.addItem_(_item("Dictionary", b"showDictionary:", "2", target=target))
     view.addItem_(AppKit.NSMenuItem.separatorItem())
     view.addItem_(_item("Enter Full Screen", b"toggleFullScreen:", "f",

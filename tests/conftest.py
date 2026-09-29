@@ -24,3 +24,5 @@ def _private_config_file(tmp_path, monkeypatch):
     itself; this only changes the default.
     """
     monkeypatch.setattr("aloud.config.CONFIG_FILE", tmp_path / "config.json")
+    # Same reasoning: every transcribed file is saved to the library.
+    monkeypatch.setattr("aloud.library.LIBRARY_DIR", tmp_path / "Transcripts")
