@@ -50,6 +50,10 @@ class ModelsWindow:
         self._timer = None
         #: downloads whose completion has already been acted on
         self._adopted: set = set()
+        #: speaker detection setup: None, "running", "done" or an error message
+        self._speaker_setup = None
+        self._speaker_status = None
+        self._speaker_button = None
 
     # -- presentation ------------------------------------------------------
 
@@ -73,6 +77,8 @@ class ModelsWindow:
         for engine in (models.PARAKEET, models.FASTER_WHISPER, models.WHISPER_CPP):
             sections.append(C.separator())
             sections.append(self._engine_section(engine))
+        sections.append(C.separator())
+        sections.append(self._speakers_section())
 
         content = C.stack(sections, spacing=T.INSET["section"])
         for view in content.arrangedSubviews():
@@ -156,9 +162,113 @@ class ModelsWindow:
 
     # -- state -------------------------------------------------------------
 
+    # -- speaker detection -------------------------------------------------
+
+    SPEAKER_COUNTS = [("Automatic", 0)] + [(f"{n} people", n) for n in range(2, 9)]
+
+    def _speakers_section(self) -> AppKit.NSView:
+        from .. import diarize
+
+        heading = C.label("Speaker Detection", T.TYPE_TITLE_2)
+        intro = C.label(
+            "Labels who is speaking in files transcribed on this Mac — a sermon's "
+            "Q&A, an interview, a meeting — for engines that do not do it "
+            "themselves. Nothing is uploaded. Setting up installs one package and "
+            "downloads two small models (about 35 MB).",
+            T.TYPE_CALLOUT, T.TEXT_TERTIARY, wraps=True)
+        self._speaker_status = C.label(diarize.status(), T.TYPE_CAPTION, T.TEXT_TERTIARY,
+                                       wraps=True)
+        self._speaker_button = C.button("Set Up", lambda _s: self._set_up_speakers(),
+                                        self._keeper)
+        toggle = C.checkbox(
+            "Label speakers in transcribed files",
+            bool(self.config.get("speakers.local", True)),
+            lambda sender: self._set_config(
+                "speakers.local", sender.state() == AppKit.NSControlStateValueOn),
+            self._keeper)
+        labels = [label for label, _ in self.SPEAKER_COUNTS]
+        counts = [n for _, n in self.SPEAKER_COUNTS]
+        current = int(self.config.get("speakers.count", 0) or 0)
+        count_popup = C.popup(
+            labels, labels[counts.index(current)] if current in counts else labels[0],
+            lambda sender: self._set_config("speakers.count",
+                                            counts[sender.indexOfSelectedItem()]),
+            self._keeper)
+        count_row = C.stack([C.label("Speakers", T.TYPE_BODY, T.TEXT_SECONDARY), count_popup,
+                             C.spacer(), self._speaker_button],
+                            vertical=False, spacing=T.SPACE["md"])
+        hint = C.label("Choosing the number of people, when you know it, is more "
+                       "reliable than Automatic.", T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True)
+        rows = [heading, intro, toggle, count_row, self._speaker_status, hint]
+        section = C.stack(rows, spacing=T.SPACE["md"])
+        for view in rows:
+            view.widthAnchor().constraintEqualToAnchor_(section.widthAnchor()).setActive_(True)
+        return section
+
+    def _set_config(self, key: str, value) -> None:
+        self.config.set(key, value)
+        self.config.save()
+
+    def _set_up_speakers(self) -> None:
+        """Install and download on a background thread; the timer shows progress."""
+        import threading
+
+        from .. import diarize
+
+        if self._speaker_setup == "running":
+            return
+        self._speaker_setup = "running"
+        self._speaker_progress = "Starting…"
+
+        def work() -> None:
+            try:
+                if not diarize.package_installed():
+                    self._speaker_progress = "Installing sherpa-onnx…"
+                    ok, detail = diarize.install_package()
+                    if not ok:
+                        self._speaker_setup = detail
+                        return
+                if not diarize.models_ready():
+                    def progress(done, total):
+                        self._speaker_progress = (
+                            f"Downloading models… {done / 1e6:,.0f} of {total / 1e6:,.0f} MB")
+                    diarize.download_models(progress)
+                self._speaker_setup = "done"
+            except Exception as exc:  # shown in the window
+                self._speaker_setup = f"Could not set up: {exc}"
+
+        threading.Thread(target=work, name="aloud-speaker-setup", daemon=True).start()
+        self._start_polling()
+        self.refresh()
+
+    def _refresh_speakers(self) -> bool:
+        """Update the speaker section. Returns whether setup is still running."""
+        from .. import diarize
+
+        if self._speaker_status is None:
+            return False
+        state = self._speaker_setup
+        if state == "running":
+            self._speaker_status.setStringValue_(getattr(self, "_speaker_progress", "Working…"))
+            self._speaker_status.setTextColor_(T.ns_color(T.TEXT_SECONDARY))
+            self._speaker_button.setEnabled_(False)
+            return True
+        if state not in (None, "done"):
+            self._speaker_status.setStringValue_(state)
+            self._speaker_status.setTextColor_(T.ns_color(T.STATUS_ERROR))
+        else:
+            ready = diarize.ready()
+            self._speaker_status.setStringValue_(diarize.status())
+            self._speaker_status.setTextColor_(
+                T.ns_color(T.STATUS_SUCCESS if ready else T.TEXT_TERTIARY))
+        self._speaker_button.setEnabled_(not diarize.ready())
+        self._speaker_button.setTitle_("Set Up" if not diarize.ready() else "Ready")
+        return False
+
     def refresh(self) -> None:
         """Bring every row up to date with the disk, the config and downloads."""
         self._adopt_finished_downloads()
+        setting_up = self._refresh_speakers()
         for key, row in self._rows.items():
             model = row["model"]
             view = models.row_view(
@@ -180,7 +290,7 @@ class ModelsWindow:
             if view.progress is not None:
                 row["bar"].setDoubleValue_(view.progress)
 
-        if not any(not job.finished for job in self._jobs.values()):
+        if not setting_up and not any(not job.finished for job in self._jobs.values()):
             self._stop_polling()
 
     def _adopt_finished_downloads(self) -> None:

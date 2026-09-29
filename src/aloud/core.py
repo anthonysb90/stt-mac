@@ -618,6 +618,9 @@ class DictationController:
                 on_progress=report if streaming else None,
             )
 
+        if job.source == "file" and not job.cancel.is_set():
+            transcript.segments = self._label_speakers(job, wav_path, transcript.segments)
+
         # Corrections run on the raw transcript, before any other cleanup, so
         # the offsets they report point at what the engine actually produced.
         options = self.postprocess_options(engine)
@@ -703,6 +706,41 @@ class DictationController:
 
         self._job_done(job)
         self._emit("on_result", dictation)
+
+    def _label_speakers(self, job: "Job", wav_path: Path, segments: List[Segment]) -> List[Segment]:
+        """Add speaker labels on this Mac when the engine gave none. Never raises.
+
+        Only when set up (see aloud.diarize) and switched on; a transcript that
+        already has speakers -- from Deepgram, AssemblyAI, ElevenLabs -- is left
+        as the engine labelled it. Any failure keeps the unlabelled transcript.
+        """
+        if not segments or any(s.speaker for s in segments):
+            return segments
+        if not self.config.get("speakers.local", True):
+            return segments
+        from . import diarize
+
+        if not diarize.ready():
+            return segments
+        self._emit("on_job_stage", job, "Identifying speakers…")
+
+        def progress(fraction: float) -> bool:
+            self._emit("on_job_stage", job, f"Identifying speakers… {int(fraction * 100)}%")
+            return not job.cancel.is_set()
+
+        try:
+            turns = diarize.speaker_turns(
+                wav_path,
+                speakers=int(self.config.get("speakers.count", 0) or 0),
+                threshold=float(self.config.get("speakers.threshold", diarize.DEFAULT_THRESHOLD)),
+                on_progress=progress,
+            )
+        except Exception:
+            log.exception("Speaker detection failed; keeping the transcript without labels")
+            return segments
+        labelled = diarize.assign(segments, turns)
+        log.info("Labelled %d speaker(s) in %s", len({t.speaker for t in turns}), job.label)
+        return labelled
 
     def _auto_export(self, job: "Job", dictation: "Dictation", transcript, wav_path: Path):
         """Write the files a watch folder asks for. Never raises.

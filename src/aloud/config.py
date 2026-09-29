@@ -239,6 +239,17 @@ DEFAULTS: Dict[str, Any] = {
         },
     },
     "history": {"enabled": True, "max_entries": 500},
+    "speakers": {
+        # Label who spoke in transcribed files, on this Mac, when the engine
+        # does not (Parakeet, Whisper). Needs setting up once: Models window →
+        # Speaker Detection.
+        "local": True,
+        # How many people speak, when you know: 0 works it out. Knowing is
+        # more reliable -- say 2 for an interview.
+        "count": 0,
+        # With count 0: lower splits one voice into several, higher merges.
+        "threshold": 0.5,
+    },
     "sync": {
         # "icloud" keeps the Dictionary in iCloud Drive/Aloud so every Mac on
         # the account shares it; "local" keeps it on this Mac. Settings → Sync.

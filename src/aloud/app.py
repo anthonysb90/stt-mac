@@ -314,6 +314,12 @@ class AloudDelegate(Foundation.NSObject):
                                                        0.0 if streaming else None))
 
     @objc.python_method
+    def on_job_stage(self, job, message: str) -> None:
+        """A step after transcription, such as identifying speakers."""
+        self._with_window(job, lambda w: w.begin(message),
+                          queued=lambda q, j: q.status(j, message))
+
+    @objc.python_method
     def on_progress(self, job, text, done, total) -> None:
         from .export import clock
 
