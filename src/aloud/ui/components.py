@@ -269,6 +269,9 @@ class DropZone(TokenBox):
         if self is None:
             return None
         self._handler = handler
+        #: Called with every path when several files are dropped at once.
+        #: Without it, only the first is taken.
+        self._many = None
         self._accepts = accepts
         self._resting_fill = fill
         self._resting_border = border
@@ -279,18 +282,27 @@ class DropZone(TokenBox):
     # -- drag protocol -----------------------------------------------------
 
     @objc.python_method
-    def _dragged_path(self, sender):
+    def _dragged_paths(self, sender):
         pasteboard = sender.draggingPasteboard()
         urls = pasteboard.readObjectsForClasses_options_(
             [Foundation.NSURL], {AppKit.NSPasteboardURLReadingFileURLsOnlyKey: True}
         )
-        if not urls or len(urls) == 0:
-            return None
-        return Path(urls[0].path())
+        if not urls:
+            return []
+        return [Path(url.path()) for url in urls]
+
+    @objc.python_method
+    def _dragged_path(self, sender):
+        paths = self._dragged_paths(sender)
+        return paths[0] if paths else None
+
+    @objc.python_method
+    def set_many_handler(self, handler) -> None:
+        self._many = handler
 
     def draggingEntered_(self, sender):
-        path = self._dragged_path(sender)
-        if path is None or not self._accepts(path):
+        # Any recording among the files will do; the rest are skipped.
+        if not any(self._accepts(p) for p in self._dragged_paths(sender)):
             return AppKit.NSDragOperationNone
         self._set_hovering(True)
         return AppKit.NSDragOperationCopy
@@ -302,16 +314,18 @@ class DropZone(TokenBox):
         self._set_hovering(False)
 
     def prepareForDragOperation_(self, sender):
-        path = self._dragged_path(sender)
-        return path is not None and self._accepts(path)
+        return any(self._accepts(p) for p in self._dragged_paths(sender))
 
     def performDragOperation_(self, sender):
         self._set_hovering(False)
-        path = self._dragged_path(sender)
-        if path is None:
+        paths = [p for p in self._dragged_paths(sender) if self._accepts(p)]
+        if not paths:
             return False
         try:
-            self._handler(path)
+            if len(paths) > 1 and self._many is not None:
+                self._many(paths)
+            else:
+                self._handler(paths[0])
         except Exception:
             return False
         return True

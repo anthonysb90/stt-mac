@@ -23,8 +23,10 @@ from . import tokens as T
 class TranscribeView:
     """Drop zone, file details, and the button that starts the work."""
 
-    def __init__(self, on_transcribe: Callable[[Path], None]) -> None:
+    def __init__(self, on_transcribe: Callable[[Path], None], on_batch: Callable = None,
+                 on_open: Callable = None, on_cancel_job: Callable = None) -> None:
         self._on_transcribe = on_transcribe
+        self._on_batch = on_batch
         self._keeper: list = []
         self.selection: Optional[media.FileInfo] = None
 
@@ -36,6 +38,12 @@ class TranscribeView:
         self.zone.heightAnchor().constraintGreaterThanOrEqualToConstant_(
             T.METRIC["drop_zone_height"]
         ).setActive_(True)
+        if on_batch is not None:
+            self.zone.set_many_handler(on_batch)
+        from .queue_view import QueueView
+
+        self.queue = QueueView(on_open=on_open or (lambda _r: None),
+                               on_cancel=on_cancel_job or (lambda _j: None))
 
         self.details = C.stack([], spacing=T.SPACE["sm"])
         self.details.setAlignment_(AppKit.NSLayoutAttributeLeading)
@@ -53,10 +61,10 @@ class TranscribeView:
         )
 
         self.view = C.stack(
-            [self.zone, self.details, self.actions], spacing=T.SPACE["xl"]
+            [self.zone, self.details, self.actions, self.queue.view], spacing=T.SPACE["xl"]
         )
         self.view.setAlignment_(AppKit.NSLayoutAttributeLeading)
-        for child in (self.zone, self.details, self.actions):
+        for child in (self.zone, self.details, self.actions, self.queue.view):
             child.widthAnchor().constraintEqualToAnchor_(self.view.widthAnchor()).setActive_(True)
 
         self.clear()
@@ -68,7 +76,7 @@ class TranscribeView:
             "Drop an audio or video file here", T.TYPE_TITLE_3, T.TEXT_SECONDARY, align="center"
         )
         self.zone_detail = C.label(
-            "mp3, m4a, wav, flac, or the audio from a video",
+            "mp3, m4a, wav, flac, or the audio from a video — several at once is fine",
             T.TYPE_CAPTION, T.TEXT_TERTIARY, align="center",
         )
         choose = C.button("Choose File…", lambda _s: self.choose(), self._keeper)
@@ -79,11 +87,13 @@ class TranscribeView:
         return stack
 
     def choose(self) -> None:
-        from .transcript_window import open_panel
+        from .transcript_window import open_files_panel
 
-        path = open_panel()
-        if path is not None:
-            self.select(path)
+        paths = open_files_panel(multiple=self._on_batch is not None)
+        if len(paths) > 1:
+            self._on_batch(paths)
+        elif paths:
+            self.select(paths[0])
 
     # -- selection ---------------------------------------------------------
 
@@ -137,7 +147,8 @@ class TranscribeView:
         self.selection = None
         self._token = None
         self.zone_headline.setStringValue_("Drop an audio or video file here")
-        self.zone_detail.setStringValue_("mp3, m4a, wav, flac, or the audio from a video")
+        self.zone_detail.setStringValue_(
+            "mp3, m4a, wav, flac, or the audio from a video — several at once is fine")
         self.transcribe_button.setEnabled_(False)
         self.clear_button.setHidden_(True)
         C.clear(self.details)

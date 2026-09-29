@@ -91,6 +91,11 @@ class Job:
     #: and the raw audio it needs to finish. None for the whole-file path.
     live: Optional[Any] = None
     pcm: bytes = b""
+    #: Where a file came from: "window" (its own progress window), "batch"
+    #: (several chosen at once) or "watch" (found in a watched folder).
+    origin: str = "window"
+    #: Files to write once it is transcribed: (format key, layout key, folder).
+    exports: List[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -117,6 +122,8 @@ class Dictation:
     #: Something the person should know about an otherwise good result, such
     #: as a cloud engine that stopped part-way and returned what it had.
     warning: str = ""
+    #: Files written automatically after transcription (watch folders).
+    exported: List[Path] = field(default_factory=list)
     #: The saved library copy of a file transcription (aloud.library.Record),
     #: or None for dictation, or when saving it failed.
     record: Optional[Any] = None
@@ -653,6 +660,8 @@ class DictationController:
         )
         if job.source == "file":
             dictation.record = self._save_to_library(job, dictation, transcript, wav_path)
+            if job.exports:
+                dictation.exported = self._auto_export(job, dictation, transcript, wav_path)
         self._last = dictation
 
         if self.config.get("history.enabled", True):
@@ -673,6 +682,43 @@ class DictationController:
 
         self._job_done(job)
         self._emit("on_result", dictation)
+
+    def _auto_export(self, job: "Job", dictation: "Dictation", transcript, wav_path: Path):
+        """Write the files a watch folder asks for. Never raises.
+
+        Written next to the source, in its folder's export subfolder, named
+        after the recording. An existing file of the same name is never
+        overwritten -- it may be one someone has since edited.
+        """
+        from . import export, library
+
+        record = dictation.record
+        if record is None:  # library turned off: build the same record unsaved
+            record = library.Record(title=library.title_from(job.label), text=dictation.text,
+                                    segments=list(dictation.segments), source_name=job.label,
+                                    engine=transcript.engine)
+        doc = export.doc_from_record(record)
+        written: List[Path] = []
+        for fmt_key, layout_key, folder in job.exports:
+            fmt = export.BY_KEY.get(fmt_key)
+            layout = export.LAYOUT_BY_KEY.get(layout_key, export.MANUSCRIPT)
+            if fmt is None or (fmt.needs_timings and not doc.timed):
+                continue
+            try:
+                folder = Path(folder)
+                folder.mkdir(parents=True, exist_ok=True)
+                stem = Path(job.label).stem or "transcript"
+                target = folder / f"{stem}.{fmt.extension}"
+                counter = 2
+                while target.exists():
+                    target = folder / f"{stem} ({counter}).{fmt.extension}"
+                    counter += 1
+                target.write_bytes(export.render(fmt, layout, doc))
+                written.append(target)
+                log.info("Exported %s to %s", job.label, target)
+            except Exception:
+                log.exception("Could not export %s as %s", job.label, fmt_key)
+        return written
 
     def _save_to_library(self, job: "Job", dictation: "Dictation", transcript, wav_path: Path):
         """Keep a finished file transcription in the library. Never raises.
@@ -712,7 +758,8 @@ class DictationController:
 
     # -- importing a file --------------------------------------------------
 
-    def transcribe_file(self, path: Path) -> Optional["Job"]:
+    def transcribe_file(self, path: Path, origin: str = "window",
+                        exports: Optional[List[Any]] = None) -> Optional["Job"]:
         """Queue an audio or video file for transcription.
 
         Converted to 16 kHz mono WAV where ffmpeg allows -- on the worker, not
@@ -735,7 +782,8 @@ class DictationController:
         # the hotkey stays live however long a file takes. A file's progress
         # lives in its own window. Queuing while recording is fine for the
         # same reason -- the recording is not disturbed.
-        job = Job(audio=path, deliver=False, source="file", label=path.name, prepare=True)
+        job = Job(audio=path, deliver=False, source="file", label=path.name, prepare=True,
+                  origin=origin, exports=list(exports or []))
         self._file_jobs.put(job)
         self._emit("on_files_changed")
         return job

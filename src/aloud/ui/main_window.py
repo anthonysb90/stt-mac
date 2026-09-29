@@ -59,7 +59,9 @@ class _WindowDelegate(Foundation.NSObject):
 class MainWindow:
     def __init__(self, controller, on_settings: Callable,
                  on_transcribe: Callable, on_open_record: Callable = None,
-                 on_quick: Callable = None) -> None:
+                 on_quick: Callable = None, on_batch: Callable = None,
+                 on_cancel_job: Callable = None) -> None:
+        self._on_batch = on_batch
         self.controller = controller
         self._on_settings = on_settings
         self._on_transcribe = on_transcribe
@@ -72,7 +74,8 @@ class MainWindow:
         self.dictionary = DictionaryView(
             controller.dictionary, on_changed=controller.reload_rules
         )
-        self.transcribe = TranscribeView(on_transcribe=on_transcribe)
+        self.transcribe = TranscribeView(on_transcribe=on_transcribe, on_batch=on_batch,
+                                         on_open=on_open_record, on_cancel_job=on_cancel_job)
 
         self.state_pill = C.label("Idle", T.TYPE_BODY_STRONG, T.STATUS_IDLE)
         self.meter = LevelMeter.alloc().initWithSource_(lambda: self.controller.level)
@@ -203,6 +206,8 @@ class MainWindow:
             accepts=media.is_supported,
             content=root,
         )
+        if self._on_batch is not None:
+            surface.set_many_handler(self._accept_many)
         host = AppKit.NSView.alloc().init()
         window.setContentView_(host)
         host.addSubview_(surface)
@@ -220,6 +225,11 @@ class MainWindow:
         return window
 
     # -- panes -------------------------------------------------------------
+
+    def _accept_many(self, paths) -> None:
+        """Several files dropped anywhere: queue them all."""
+        self.show_pane(TRANSCRIBE)
+        self._on_batch(paths)
 
     def accept_drop(self, path) -> None:
         """A file was dropped anywhere on the window."""

@@ -14,6 +14,7 @@ button is also where "did that take?" gets answered.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import AppKit
@@ -47,11 +48,17 @@ SAME_LABEL = "Same as dictation"
 class SettingsWindow:
     """A small, single-panel settings window on Cmd-comma."""
 
-    def __init__(self, controller, on_hotkey_changed=None, on_manage_models=None) -> None:
+    def __init__(self, controller, on_hotkey_changed=None, on_manage_models=None,
+                 on_watch_changed=None, watcher=None) -> None:
         self.controller = controller
         self.config = controller.config
         self._on_hotkey_changed = on_hotkey_changed
         self._on_manage_models = on_manage_models
+        #: Restarts the watcher after the folder list changes.
+        self._on_watch_changed = on_watch_changed
+        #: Returns the running watch.Watcher, to mark a new folder's files.
+        self._watcher = watcher or (lambda: None)
+        self._watch_list = None
         self._keeper: list = []
         self.window: Optional[AppKit.NSWindow] = None
         self._model_field = None
@@ -88,6 +95,8 @@ class SettingsWindow:
                 self._model_section(),
                 C.separator(),
                 self._credentials_section(),
+                C.separator(),
+                self._watch_section(),
                 C.separator(),
                 self._sounds_section(),
                 C.separator(),
@@ -469,6 +478,124 @@ class SettingsWindow:
         self.controller.reset_file_engine()
         self._refresh_model_section()
         self._refresh_credentials()
+
+    # -- watch folders -----------------------------------------------------
+
+    WATCH_FORMATS = [("docx", "Word Document"), ("pdf", "PDF"), ("txt", "Plain Text"),
+                     ("md", "Markdown"), ("", "No file — Transcripts only")]
+
+    def _watch_section(self) -> AppKit.NSView:
+        """Folders whose new recordings transcribe themselves."""
+        from .. import export
+
+        self._watch_list = C.stack([], spacing=T.SPACE["sm"])
+        add = C.button("Add Folder…", lambda _s: self._add_watch_folder(), self._keeper)
+        add_row = C.stack([C.spacer(), add], vertical=False, spacing=T.SPACE["md"])
+
+        keys = [k for k, _ in self.WATCH_FORMATS]
+        labels = [label for _, label in self.WATCH_FORMATS]
+        current = str(self.config.get("watch.export", "docx") or "")
+        format_popup = C.popup(
+            labels, labels[keys.index(current)] if current in keys else labels[0],
+            lambda sender: self._set_watch("watch.export", keys[sender.indexOfSelectedItem()]),
+            self._keeper,
+        )
+        layout_keys = [l.key for l in export.LAYOUTS]
+        layout_labels = [l.label for l in export.LAYOUTS]
+        current_layout = str(self.config.get("watch.layout", "manuscript"))
+        layout_popup = C.popup(
+            layout_labels,
+            layout_labels[layout_keys.index(current_layout)]
+            if current_layout in layout_keys else export.MANUSCRIPT.label,
+            lambda sender: self._set_watch("watch.layout",
+                                           layout_keys[sender.indexOfSelectedItem()]),
+            self._keeper,
+        )
+        note = C.label(
+            "New recordings that appear in these folders are transcribed "
+            "automatically, kept in Transcripts, and saved as a file in a "
+            "“Transcripts” folder beside them. A file is only taken once it has "
+            "finished copying, and never twice.",
+            T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True,
+        )
+        self._refresh_watch_list()
+        return self._section("Watch Folders", [
+            self._watch_list, add_row,
+            self._field_row("Save as", format_popup),
+            self._field_row("Layout", layout_popup),
+            note,
+        ])
+
+    def _folders(self) -> list:
+        return [str(p) for p in (self.config.get("watch.folders", []) or [])]
+
+    def _refresh_watch_list(self) -> None:
+        C.clear(self._watch_list)
+        folders = self._folders()
+        if not folders:
+            self._watch_list.addArrangedSubview_(
+                C.label("No folders yet.", T.TYPE_CALLOUT, T.TEXT_TERTIARY))
+            return
+        for folder in folders:
+            path = C.label(folder, T.TYPE_MONO, T.TEXT_SECONDARY)
+            remove = C.button("Remove", lambda _s, f=folder: self._remove_watch_folder(f),
+                              self._keeper)
+            row = C.stack([path, C.spacer(), remove], vertical=False, spacing=T.SPACE["md"])
+            self._watch_list.addArrangedSubview_(row)
+            row.widthAnchor().constraintEqualToAnchor_(
+                self._watch_list.widthAnchor()).setActive_(True)
+
+    def _add_watch_folder(self) -> None:
+        panel = AppKit.NSOpenPanel.openPanel()
+        panel.setCanChooseFiles_(False)
+        panel.setCanChooseDirectories_(True)
+        panel.setAllowsMultipleSelection_(False)
+        panel.setCanCreateDirectories_(True)
+        panel.setMessage_("Choose a folder whose new recordings should transcribe themselves")
+        panel.setPrompt_("Watch")
+        if panel.runModal() != AppKit.NSModalResponseOK or not panel.URLs():
+            return
+        folder = str(panel.URLs()[0].path())
+        if folder in self._folders():
+            return
+
+        from .. import watch
+
+        existing = watch.Watcher(watch.Settings(folders=[]), lambda p, e: False).files_in(
+            Path(folder))
+        include = False
+        if existing:
+            alert = AppKit.NSAlert.alloc().init()
+            count = len(existing)
+            alert.setMessageText_(
+                f"This folder already has {count} recording{'' if count == 1 else 's'}.")
+            alert.setInformativeText_(
+                "Transcribe them now as well, or only recordings added from now on?")
+            alert.addButtonWithTitle_("Only New Recordings")
+            alert.addButtonWithTitle_(f"Transcribe All {count}")
+            include = alert.runModal() == AppKit.NSAlertSecondButtonReturn
+
+        self.config.set("watch.folders", self._folders() + [folder])
+        self.config.save()
+        if self._on_watch_changed is not None:
+            self._on_watch_changed()
+        watcher = self._watcher()
+        if watcher is not None:
+            watcher.adopt(Path(folder), include_existing=include)
+        self._refresh_watch_list()
+
+    def _remove_watch_folder(self, folder: str) -> None:
+        self.config.set("watch.folders", [f for f in self._folders() if f != folder])
+        self.config.save()
+        if self._on_watch_changed is not None:
+            self._on_watch_changed()
+        self._refresh_watch_list()
+
+    def _set_watch(self, key: str, value) -> None:
+        self.config.set(key, value)
+        self.config.save()
+        if self._on_watch_changed is not None:
+            self._on_watch_changed()
 
     # -- appearance --------------------------------------------------------
 

@@ -239,6 +239,17 @@ DEFAULTS: Dict[str, Any] = {
         },
     },
     "history": {"enabled": True, "max_entries": 500},
+    "watch": {
+        # Folders whose new recordings are transcribed automatically. Set in
+        # Settings → Watch Folders.
+        "folders": [],
+        # The file written beside each one: docx, pdf, txt, md, or "" for
+        # none (the transcript is still kept in Transcripts).
+        "export": "docx",
+        "layout": "manuscript",
+        # Where those files go, inside the watched folder.
+        "subfolder": "Transcripts",
+    },
     "dictation": {
         # Transcribe hotkey dictation phrase by phrase while you speak, so
         # releasing the key leaves only the last phrase to do. False goes

@@ -59,6 +59,11 @@ class AloudDelegate(Foundation.NSObject):
         self._transcript_windows = []
         #: job id -> the window watching that file
         self._import_windows = {}
+        #: job id -> job, for files in the queue (batches and watch folders)
+        self._queued_jobs = {}
+        #: job id -> source path, for files found in a watch folder
+        self._watch_paths = {}
+        self.watcher = None
         return self
 
     # -- lifecycle ---------------------------------------------------------
@@ -89,6 +94,8 @@ class AloudDelegate(Foundation.NSObject):
             on_transcribe=self._begin_import,
             on_open_record=self._open_record,
             on_quick=lambda: self.quick.show(start=True),
+            on_batch=self._begin_batch,
+            on_cancel_job=self._cancel_queued,
         )
         self.quick = QuickDictateWindow(self.controller, on_saved=self._library_changed)
         self.models_window = ModelsWindow(self.controller, on_changed=self._models_changed)
@@ -96,6 +103,8 @@ class AloudDelegate(Foundation.NSObject):
             self.controller,
             on_hotkey_changed=self._hotkey_changed,
             on_manage_models=lambda: self.models_window.show(),
+            on_watch_changed=self._restart_watcher,
+            watcher=lambda: self.watcher,
         )
         self.menu_bar = MenuBarItem(
             self.controller,
@@ -111,6 +120,7 @@ class AloudDelegate(Foundation.NSObject):
 
         self.controller.add_observer(self)
         self.controller.start()
+        self._restart_watcher()
 
         # A menu-bar-only app that throws a window up at login is not a
         # menu-bar-only app. With the Dock icon on, the window is the app.
@@ -130,6 +140,8 @@ class AloudDelegate(Foundation.NSObject):
     def applicationWillTerminate_(self, _notification):
         log.info("Quitting")
         self.controller.shutdown()
+        if self.watcher is not None:
+            self.watcher.stop()
         if self.menu_bar is not None:
             self.menu_bar.remove()
 
@@ -261,7 +273,8 @@ class AloudDelegate(Foundation.NSObject):
     # on the main thread too, so by the time a block runs, the window is there.
 
     @objc.python_method
-    def _with_window(self, job, action, pop: bool = False) -> None:
+    def _with_window(self, job, action, pop: bool = False, queued=None) -> None:
+        """Send a file's news to its window -- or, with none, to its queue row."""
         if getattr(job, "source", "") != "file":
             return
         job_id = job.id
@@ -271,12 +284,22 @@ class AloudDelegate(Foundation.NSObject):
             window = windows.pop(job_id, None) if pop else windows.get(job_id)
             if window is not None:
                 action(window)
+                return
+            queue = self._queue()
+            if queued is not None and queue is not None and queue.has(job_id):
+                queued(queue, job_id)
 
         run_on_main(run)
 
     @objc.python_method
+    def _queue(self):
+        transcribe = getattr(self.main_window, "transcribe", None)
+        return getattr(transcribe, "queue", None)
+
+    @objc.python_method
     def on_job_preparing(self, job) -> None:
-        self._with_window(job, lambda w: w.begin("Converting with ffmpeg…"))
+        self._with_window(job, lambda w: w.begin("Converting with ffmpeg…"),
+                          queued=lambda q, j: q.status(j, "Converting…"))
 
     @objc.python_method
     def on_job_started(self, job) -> None:
@@ -286,18 +309,29 @@ class AloudDelegate(Foundation.NSObject):
             f"Transcribing with {engine.label} — "
             f"this engine reports no progress until it finishes."
         )
-        self._with_window(job, lambda w: w.begin(detail))
+        self._with_window(job, lambda w: w.begin(detail),
+                          queued=lambda q, j: q.status(j, f"Transcribing with {engine.label}…",
+                                                       0.0 if streaming else None))
 
     @objc.python_method
     def on_progress(self, job, text, done, total) -> None:
-        self._with_window(job, lambda w: w.update(text, done, total))
+        from .export import clock
+
+        where = f"{clock(done)} of {clock(total)}" if total > 0 else f"{clock(done)} so far"
+        self._with_window(job, lambda w: w.update(text, done, total),
+                          queued=lambda q, j: q.status(
+                              j, f"Transcribing — {where}", done / total if total > 0 else None))
 
     @objc.python_method
     def on_cancelled(self, job) -> None:
-        self._with_window(job, lambda w: w.cancelled(), pop=True)
+        self._watch_done(job, False, "stopped")
+        self._with_window(job, lambda w: w.cancelled(), pop=True,
+                          queued=lambda q, j: q.failed(j, "Stopped"))
 
     @objc.python_method
     def on_result(self, dictation) -> None:
+        if dictation.source == "file":
+            self._watch_done_id(dictation.job_id, True)
         run_on_main(lambda: self._deliver_result(dictation))
 
     @objc.python_method
@@ -306,6 +340,15 @@ class AloudDelegate(Foundation.NSObject):
         if dictation.source != "file":
             return
         window = self._import_windows.pop(dictation.job_id, None)
+        queue = self._queue()
+        if window is None and queue is not None and queue.has(dictation.job_id):
+            words = len(dictation.text.split())
+            detail = f"Done · {words:,} words"
+            if dictation.exported:
+                detail += " · saved " + ", ".join(p.name for p in dictation.exported)
+            queue.done(dictation.job_id, dictation.record, detail)
+            self._queued_jobs.pop(dictation.job_id, None)
+            return
         if window is None:
             # Started from somewhere without a window — give it one.
             window = self._new_transcript_window(dictation.label or "Transcript")
@@ -314,22 +357,82 @@ class AloudDelegate(Foundation.NSObject):
 
     @objc.python_method
     def on_empty(self, job) -> None:
+        self._watch_done(job, False, "no speech")
         self._with_window(
-            job, lambda w: w.fail(f"No speech was recognised in {job.label}."), pop=True)
+            job, lambda w: w.fail(f"No speech was recognised in {job.label}."), pop=True,
+            queued=lambda q, j: q.failed(j, "No speech was recognised"))
 
     @objc.python_method
     def on_job_failed(self, job, title: str, message: str) -> None:
-        """A file failed: say so in its own window, not in an alert."""
+        """A file failed: say so in its own window or queue row, not an alert."""
+        self._watch_done(job, False, message)
         job_id = job.id
 
         def run() -> None:
             window = self._import_windows.pop(job_id, None)
+            queue = self._queue()
             if window is not None:
                 window.fail(f"{title}: {message}")
+            elif queue is not None and queue.has(job_id):
+                queue.failed(job_id, f"{title}: {message}")
             else:
                 self._alert(title, message)
 
         run_on_main(run)
+
+    # -- batches and watch folders -------------------------------------------
+
+    @objc.python_method
+    def _begin_batch(self, paths, origin: str = "batch") -> None:
+        """Several files at once: one queue row each, not one window each."""
+        from . import media
+
+        self.main_window.show_transcribe()
+        for path in paths:
+            if not media.is_supported(path):
+                continue
+            job = self.controller.transcribe_file(path, origin=origin)
+            if job is not None:
+                self._queued_jobs[job.id] = job
+                self.main_window.transcribe.queue.add(job.id, path.name, origin)
+
+    @objc.python_method
+    def _cancel_queued(self, job_id) -> None:
+        job = self._queued_jobs.get(job_id)
+        if job is not None:
+            self.controller.cancel_import(job)
+
+    @objc.python_method
+    def _queue_watched(self, path, exports):
+        """Called by the watcher, on its own thread, for each new recording."""
+        job = self.controller.transcribe_file(path, origin="watch", exports=exports)
+        if job is None:
+            return False
+        self._watch_paths[job.id] = path
+        self._queued_jobs[job.id] = job
+        run_on_main(lambda: self.main_window.transcribe.queue.add(job.id, path.name, "watch"))
+        return True
+
+    @objc.python_method
+    def _watch_done(self, job, ok: bool, detail: str = "") -> None:
+        self._watch_done_id(getattr(job, "id", None), ok, detail)
+
+    @objc.python_method
+    def _watch_done_id(self, job_id, ok: bool, detail: str = "") -> None:
+        path = self._watch_paths.pop(job_id, None)
+        if path is not None and self.watcher is not None:
+            self.watcher.finished(path, ok, detail)
+
+    @objc.python_method
+    def _restart_watcher(self) -> None:
+        """(Re)start watching whatever folders the config names now."""
+        from . import watch
+
+        if self.watcher is not None:
+            self.watcher.stop()
+        self.watcher = watch.Watcher(watch.Settings.from_config(self.config),
+                                     self._queue_watched)
+        self.watcher.start()
 
     @objc.python_method
     def on_error(self, title: str, message: str) -> None:
@@ -390,11 +493,13 @@ class AloudDelegate(Foundation.NSObject):
         self.main_window.show_pane(main_window_module.DICTIONARY)
 
     def transcribeFile_(self, _sender):
-        """File > Transcribe Audio File… — the menu route into the same flow."""
+        """File > Transcribe Audio Files… — one to look at first, or several to queue."""
         self.main_window.show_transcribe()
-        path = transcript_window.open_panel()
-        if path is not None:
-            self.main_window.transcribe.select(path)
+        paths = transcript_window.open_files_panel(multiple=True)
+        if len(paths) > 1:
+            self._begin_batch(paths)
+        elif paths:
+            self.main_window.transcribe.select(paths[0])
 
     def startDictation_(self, _sender):
         self.controller.begin_recording()

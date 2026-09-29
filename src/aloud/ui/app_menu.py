@@ -81,7 +81,7 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
 
     # --- File --------------------------------------------------------------
     file_menu = _submenu(main, "File")
-    file_menu.addItem_(_item("Transcribe Audio File…", b"transcribeFile:", "o", target=target))
+    file_menu.addItem_(_item("Transcribe Audio Files…", b"transcribeFile:", "o", target=target))
     file_menu.addItem_(AppKit.NSMenuItem.separatorItem())
     file_menu.addItem_(_item("Close", b"performClose:", "w"))
 

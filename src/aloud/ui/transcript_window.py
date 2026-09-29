@@ -623,19 +623,23 @@ def _alert(title: str, message: str) -> None:
 
 
 def open_panel() -> Optional[Path]:
-    """Ask for an audio or video file. Returns None if the user cancels."""
+    """Ask for one audio or video file. Returns None if the user cancels."""
+    paths = open_files_panel(multiple=False)
+    return paths[0] if paths else None
+
+
+def open_files_panel(multiple: bool = True) -> list:
+    """Ask for audio or video files; several at once when ``multiple``."""
     from ..media import AUDIO_EXTENSIONS
 
     panel = AppKit.NSOpenPanel.openPanel()
     panel.setCanChooseFiles_(True)
     panel.setCanChooseDirectories_(False)
-    panel.setAllowsMultipleSelection_(False)
-    panel.setMessage_("Choose an audio or video file to transcribe")
+    panel.setAllowsMultipleSelection_(multiple)
+    panel.setMessage_("Choose audio or video files to transcribe — hold ⌘ to pick several"
+                      if multiple else "Choose an audio or video file to transcribe")
     panel.setPrompt_("Transcribe")
     panel.setAllowedFileTypes_(list(AUDIO_EXTENSIONS))
     if panel.runModal() != AppKit.NSModalResponseOK:
-        return None
-    urls = panel.URLs()
-    if not urls or len(urls) == 0:
-        return None
-    return Path(urls[0].path())
+        return []
+    return [Path(url.path()) for url in (panel.URLs() or [])]
