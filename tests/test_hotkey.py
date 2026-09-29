@@ -151,3 +151,37 @@ def test_install_proceeds_once_trusted(monkeypatch):
     listener.install(runloop=object())
     assert listener._tap is not None
     listener.uninstall()
+
+
+# -- the hotkey used as a modifier (Option+E for é) ------------------------------
+
+
+def test_typing_with_the_hotkey_held_is_not_dictation():
+    from aloud.hotkey import HotkeyListener
+
+    events = []
+    listener = HotkeyListener("right_option", on_press=lambda: events.append("press"),
+                              on_release=lambda: events.append("release"),
+                              on_chord=lambda: events.append("chord"))
+    listener._dispatch(True)
+    listener._chorded = True  # a key went down while it was held
+    listener._dispatch(False)
+    assert events == ["press", "chord"]
+    listener._dispatch(True)
+    listener._dispatch(False)
+    assert events[-2:] == ["press", "release"], "the next plain press is normal"
+
+
+def test_a_chord_in_toggle_mode_undoes_the_toggle():
+    from aloud.hotkey import HotkeyListener
+
+    events = []
+    listener = HotkeyListener("right_option", on_press=lambda: events.append("press"),
+                              on_release=lambda: events.append("release"),
+                              on_chord=lambda: events.append("chord"), mode="toggle")
+    listener._dispatch(True)
+    listener._chorded = True
+    listener._dispatch(False)
+    assert events == ["press", "chord"] and not listener.active
+    listener._dispatch(True)
+    assert events[-1] == "press", "the next tap starts, rather than stops"

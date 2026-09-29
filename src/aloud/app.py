@@ -24,7 +24,7 @@ import AppKit
 import Foundation
 import objc
 
-from . import APP_NAME, __version__, toolpath, updates
+from . import APP_NAME, __version__, learn, toolpath, updates
 from .config import Config
 from .core import DictationController, State
 from .mainthread import run_on_main
@@ -215,7 +215,8 @@ class AloudDelegate(Foundation.NSObject):
         """Make a transcript window, and let go of the ones already closed."""
         self._prune_windows()
         window = transcript_window.TranscriptWindow(
-            title, on_cancel=on_cancel, on_changed=self._library_changed
+            title, on_cancel=on_cancel, on_changed=self._library_changed,
+            teacher=learn.Teacher(self.controller),
         )
         self._transcript_windows.append(window)
         return window
@@ -242,7 +243,7 @@ class AloudDelegate(Foundation.NSObject):
                 return
         self._prune_windows()
         window = transcript_window.TranscriptWindow.for_record(
-            record, on_changed=self._library_changed
+            record, on_changed=self._library_changed, teacher=learn.Teacher(self.controller),
         )
         self._transcript_windows.append(window)
         window.show()

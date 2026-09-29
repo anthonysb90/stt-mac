@@ -1,6 +1,7 @@
 """Transcribing while you speak: pauses, commits, previews, and the session."""
 
 import math
+from aloud.core import State
 import struct
 import threading
 import time
@@ -303,3 +304,14 @@ def test_the_hotkey_stops_a_listening_quick_dictate(app):
     app.live = Session()
     app.begin_recording()
     assert Session.stopped and not app.recorder.recording
+
+
+def test_a_chord_discards_the_recording_and_breaks_a_double_tap(app, tmp_path):
+    opened = []
+    app.add_observer(type("O", (), {"on_quick_dictate_requested": lambda _s: opened.append(1)})())
+    _tap(app, tmp_path, "a.wav")
+    app.begin_recording()
+    app.discard_chord()          # Option+E: typing, not dictating
+    assert app.state is State.IDLE and not app.recorder.recording
+    _tap(app, tmp_path, "b.wav")
+    assert opened == [], "the chord broke the pair"

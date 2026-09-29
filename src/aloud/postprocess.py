@@ -89,6 +89,12 @@ def process(text: str, options: Dict[str, Any] | None = None) -> str:
     if commands:
         text = _apply_commands(text, commands)
 
+    if options.get("scripture", True):
+        # After spoken commands, before tidying: "John three sixteen" -> "John 3:16".
+        from .scripture import format_references
+
+        text = format_references(text)
+
     if options.get("collapse_whitespace", True):
         text = _tidy(text)
 

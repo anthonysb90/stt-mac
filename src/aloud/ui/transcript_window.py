@@ -44,10 +44,15 @@ class TranscriptWindow:
     #: The layout the last window used, so the next one opens the same way.
     last_layout = export.MANUSCRIPT.key
 
-    def __init__(self, title: str, on_cancel=None, on_changed=None) -> None:
+    def __init__(self, title: str, on_cancel=None, on_changed=None, teacher=None) -> None:
         self.title = title
         self._on_cancel = on_cancel
         self._on_changed = on_changed
+        #: Adds corrections learned from edits to the Dictionary; see
+        #: app.Teacher. None disables the offer.
+        self._teacher = teacher
+        self._editing = False
+        self._before_edit = ""
         self._keeper: list = []
         self.dictation = None
         self.record: Optional[library.Record] = None
@@ -76,12 +81,15 @@ class TranscriptWindow:
                                             lambda _s: self._step(-1), self._keeper)
         self.next_match = C.icon_button("chevron.down", "Next match",
                                         lambda _s: self._step(1), self._keeper)
+        self.edit_button = C.button("Edit", lambda _s: self.toggle_edit(), self._keeper)
+        self.edit_button.setToolTip_(
+            "Correct the transcript. Fixes you make can be added to the Dictionary.")
         self.speakers_button = C.button("Speakers…", lambda _s: self.edit_speakers(),
                                         self._keeper)
         self.toolbar = C.stack(
             [C.label("View", T.TYPE_BODY, T.TEXT_SECONDARY), self.layout_popup,
              self.search, self.match_label, self.previous_match, self.next_match,
-             C.spacer(), self.speakers_button],
+             C.spacer(), self.edit_button, self.speakers_button],
             vertical=False, spacing=T.SPACE["md"],
         )
         self.search.widthAnchor().constraintGreaterThanOrEqualToConstant_(
@@ -103,9 +111,10 @@ class TranscriptWindow:
         self.window = self._build()
 
     @classmethod
-    def for_record(cls, record: library.Record, on_changed=None) -> "TranscriptWindow":
+    def for_record(cls, record: library.Record, on_changed=None,
+                   teacher=None) -> "TranscriptWindow":
         """A window for a transcript from the library, opened straight to it."""
-        window = cls(record.title, on_changed=on_changed)
+        window = cls(record.title, on_changed=on_changed, teacher=teacher)
         window._show_record(record, summary=_record_summary(record))
         return window
 
@@ -384,6 +393,91 @@ class TranscriptWindow:
                 _alert("Could not save the speaker names", str(exc))
         self._render()
         self._changed()
+
+    # -- editing -----------------------------------------------------------
+
+    def toggle_edit(self) -> None:
+        if self._editing:
+            self._finish_edit()
+        else:
+            self._start_edit()
+
+    def _start_edit(self) -> None:
+        """Edit the words themselves. Layouts come back when you are done."""
+        if self.record is None:
+            return
+        self._editing = True
+        self._before_edit = self.record.text
+        self._set_body(self.record.text)
+        self.body.setEditable_(True)
+        self.layout_popup.setEnabled_(False)
+        self.search.setEnabled_(False)
+        self.speakers_button.setEnabled_(False)
+        self.edit_button.setTitle_("Done")
+        self.status.setStringValue_(
+            "Editing. Fix any word; short fixes can be added to the Dictionary when "
+            "you press Done, so they are corrected automatically next time.")
+        self.window.makeFirstResponder_(self.body)
+
+    def _finish_edit(self) -> None:
+        from .. import learn
+
+        record = self.record
+        after = str(self.body.string()).strip()
+        before = self._before_edit
+        self._editing = False
+        self.body.setEditable_(False)
+        self.layout_popup.setEnabled_(True)
+        self.search.setEnabled_(True)
+        self.speakers_button.setEnabled_(True)
+        self.edit_button.setTitle_("Edit")
+        self.status.setStringValue_(_record_summary(record))
+
+        if record is None or after == before.strip():
+            self._render()
+            return
+        found = learn.suggestions(before, after)
+        if record.segments:
+            # Every layout, subtitles included, shows the edit.
+            record.segments = learn.reflow(record.segments, after)
+        record.text = after
+        if record.folder is not None:
+            try:
+                library.save(record)
+            except OSError as exc:
+                _alert("Could not save your edits", str(exc))
+        self._render()
+        self._changed()
+        self._offer_to_learn(found)
+
+    def _offer_to_learn(self, found) -> None:
+        """"Always correct these?" — with a box per fix, all ticked."""
+        teacher = self._teacher
+        if teacher is None or not found:
+            return
+        fresh = teacher.fresh(found)
+        if not fresh:
+            return
+        boxes = []
+        for suggestion in fresh:
+            boxes.append((suggestion, C.checkbox(
+                f"“{suggestion.heard}” → “{suggestion.write}”", True,
+                lambda _s: None, self._keeper)))
+        accessory = C.fit_to_content(C.stack([box for _s, box in boxes], spacing=T.SPACE["sm"]))
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("Correct these automatically from now on?")
+        alert.setInformativeText_(
+            "Each ticked fix becomes a Dictionary correction, so the next dictation "
+            "or transcript that hears the same thing is fixed for you.")
+        alert.setAccessoryView_(accessory)
+        alert.addButtonWithTitle_("Add to Dictionary")
+        alert.addButtonWithTitle_("Not Now")
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            return
+        chosen = [s for s, box in boxes if box.state() == AppKit.NSControlStateValueOn]
+        problems = teacher.teach(chosen)
+        if problems:
+            _alert("Some fixes were not added", "\n".join(problems))
 
     def _changed(self) -> None:
         if self._on_changed is not None:

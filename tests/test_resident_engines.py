@@ -705,8 +705,27 @@ def test_parakeet_gives_up_its_thread_between_file_chunks(tmp_path, monkeypatch,
     stream = _StreamingParakeetStream()
     engine = _ready_engine(monkeypatch, _StreamingParakeet(stream), stream_chunk_seconds=10.0)
     turns = []
-    real = engine._mlx
-    monkeypatch.setattr(engine, "_mlx", lambda fn, *a, **k: turns.append(fn) or real(fn, *a, **k))
+    real = pk_module._MLXThread.call
+    monkeypatch.setattr(pk_module._MLXThread, "call",
+                        lambda self, fn, *a, **k: turns.append(fn) or real(self, fn, *a, **k))
     engine.transcribe(wav, on_progress=lambda *_: True)
     feeds = [fn for fn in turns if getattr(fn, "__name__", "") == "feed"]
     assert len(feeds) == 3, "one turn per 10 s chunk"
+
+
+def test_closing_mid_file_waits_for_the_file(tmp_path, monkeypatch, fake_mlx):
+    """Closing mid-stream used to start a second MLX thread for the next chunk."""
+    wav = tmp_path / "long.wav"
+    _write_wav(wav, seconds=30.0)
+    stream = _StreamingParakeetStream()
+    engine = _ready_engine(monkeypatch, _StreamingParakeet(stream), stream_chunk_seconds=10.0)
+    threads = set()
+
+    def progress(*_):
+        threads.add(id(engine._mlx_thread))
+        engine.close()  # Settings switched engines while the file runs
+        return True
+
+    transcript = engine.transcribe(wav, on_progress=progress)
+    assert transcript.text and len(threads) == 1
+    assert engine._model is None or engine._mlx_thread is None  # released afterwards

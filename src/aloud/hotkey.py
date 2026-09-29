@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, Tuple
+from typing import Callable, Optional, Tuple
 
 import Quartz
 
@@ -89,6 +89,7 @@ class HotkeyListener:
         on_press: Callable[[], None],
         on_release: Callable[[], None],
         mode: str = "hold",
+        on_chord: Optional[Callable[[], None]] = None,
     ) -> None:
         if key not in MODIFIER_KEYS:
             raise HotkeyError(
@@ -107,6 +108,11 @@ class HotkeyListener:
         self._runloop = None
         self._down = False
         self._toggled_on = False
+        #: A key went down while the hotkey was held: Option+E for "é", an
+        #: Option symbol on a European layout. That press was typing, not
+        #: dictation. See _dispatch.
+        self._chorded = False
+        self._on_chord = on_chord
         self._lock = threading.Lock()
 
     # -- lifecycle ---------------------------------------------------------
@@ -130,7 +136,9 @@ class HotkeyListener:
                 "under System Settings > Privacy & Security > Accessibility."
             )
 
-        mask = Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
+        # Key-downs too, only to notice a chord; they are never acted on.
+        mask = (Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
+                | Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown))
         self._tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap,
             Quartz.kCGHeadInsertEventTap,
@@ -174,6 +182,10 @@ class HotkeyListener:
                 Quartz.CGEventTapEnable(self._tap, True)
             return event
 
+        if event_type == Quartz.kCGEventKeyDown:
+            if self._down:
+                self._chorded = True
+            return event
         if event_type != Quartz.kCGEventFlagsChanged:
             return event
 
@@ -202,7 +214,15 @@ class HotkeyListener:
                 return  # key repeat / duplicate flag event
             self._down = is_down
 
-            if self.mode == "toggle":
+            if is_down:
+                self._chorded = False
+            if not is_down and self._chorded and self._on_chord is not None:
+                # Released after typing with it: undo the press rather than
+                # finish it. No dictation, and no half of a double tap.
+                self._chorded = False
+                self._toggled_on = False
+                callback = self._on_chord
+            elif self.mode == "toggle":
                 if not is_down:
                     return  # act on press only
                 self._toggled_on = not self._toggled_on

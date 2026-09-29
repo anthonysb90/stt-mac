@@ -183,6 +183,10 @@ DEFAULTS: Dict[str, Any] = {
         "strip_fillers": True,
         "fillers": ["um", "uh", "erm", "hmm", "mhm", "you know"],
         "capitalize_first": True,
+        # "John three sixteen" -> "John 3:16", "first Corinthians thirteen four
+        # through seven" -> "1 Corinthians 13:4-7". Cautious with books that
+        # are also names (John, Mark, James…): those need chapter and verse.
+        "scripture": True,
         "collapse_whitespace": True,
         # Spoken phrases replaced with literal characters.
         "commands": {

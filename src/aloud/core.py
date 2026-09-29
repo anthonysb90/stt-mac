@@ -244,6 +244,8 @@ class DictationController:
 
     def shutdown(self) -> None:
         self._stopping.set()
+        if self.live is not None:
+            self.live.cancel()
         self._disarm_max_duration()
         self.recorder.cancel()
         if self.listener is not None:
@@ -297,6 +299,7 @@ class DictationController:
                 on_press=self.begin_recording,
                 on_release=self.finish_recording,
                 mode=str(self.config.get("hotkey.mode", "hold")),
+                on_chord=self.discard_chord,
             )
             self.listener.install()
         except hotkey_mod.HotkeyError as exc:
@@ -327,8 +330,11 @@ class DictationController:
             return
         if self.live is not None and self.live.active:
             # Quick Dictate is listening: the hotkey means "stop", not a
-            # second recording on top of it.
+            # second recording on top of it. Reset the listener, or toggle
+            # mode would take the next tap as a "stop" and swallow it.
             self.live.stop()
+            if self.listener is not None:
+                self.listener.reset()
             return
         try:
             self.recorder.start()
@@ -357,6 +363,7 @@ class DictationController:
 
         if wav_path is None:
             self._set_state(self._resting_state())
+            self._note_short_tap()  # a tap too quick to capture any audio
             return
 
         minimum = float(self.config.get("audio.min_seconds", 0.35))
@@ -370,6 +377,19 @@ class DictationController:
         with self._state_lock:
             self._jobs.put(Job(audio=wav_path, deliver=True, source="microphone"))
             self._set_state(State.TRANSCRIBING)
+
+    def discard_chord(self) -> None:
+        """The hotkey was used to type (Option+E, say): throw the recording away.
+
+        Before, holding Right Option to type an accented letter recorded the
+        keystrokes' clatter and, if held long enough, pasted a transcription
+        of it. Now nothing is transcribed, and the press does not count as
+        half of a double tap.
+        """
+        self._last_short_tap = 0.0
+        if self.state is State.RECORDING:
+            log.debug("Hotkey used as a modifier; discarding the recording")
+            self.cancel_recording()
 
     #: Two taps of the hotkey this close together open Quick Dictate.
     DOUBLE_TAP_SECONDS = 0.6
@@ -483,6 +503,13 @@ class DictationController:
                 self._emit("on_files_changed")
             else:
                 self._running = None
+                # A short tap landing between this job's _settle and the line
+                # above saw it still running and chose TRANSCRIBING. Nothing
+                # would ever clear that, so check once more now it is done.
+                with self._state_lock:
+                    stuck = self.state is State.TRANSCRIBING and self._jobs.qsize() == 0
+                if stuck:
+                    self._settle()
             if job.cleanup is not None:
                 try:
                     job.cleanup()

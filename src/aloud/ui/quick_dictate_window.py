@@ -68,6 +68,27 @@ class _Delegate(Foundation.NSObject):
         self._handler()
 
 
+class _TextDelegate(Foundation.NSObject):
+    """Lets Esc reach the window while the text has focus.
+
+    NSTextView keeps Esc for itself (it offers word completions), so the
+    panel's cancelOperation: never heard it and Esc did nothing.
+    """
+
+    def initWithHandler_(self, handler):
+        self = objc.super(_TextDelegate, self).init()
+        if self is None:
+            return None
+        self._handler = handler
+        return self
+
+    def textView_doCommandBySelector_(self, _view, selector):
+        if selector == b"cancelOperation:" or selector == "cancelOperation:":
+            self._handler()
+            return True
+        return False
+
+
 class QuickDictateWindow:
     def __init__(self, controller, on_saved=None) -> None:
         self.controller = controller
@@ -80,6 +101,11 @@ class QuickDictateWindow:
         self._timer = None
         self._timer_target = None
         self._placed = False
+        #: Bumped whenever a session starts or is abandoned. Callbacks carry
+        #: the value they were made with and are ignored once it moves on, so
+        #: a late "finished" from a cancelled or replaced session can neither
+        #: refill a cleared window nor detach the session that replaced it.
+        self._generation = 0
 
         self.status = C.label("Ready", T.TYPE_BODY_STRONG, T.STATUS_IDLE)
         self.meter = LevelMeter.alloc().initWithSource_(self._level)
@@ -106,6 +132,8 @@ class QuickDictateWindow:
 
         self._delegate = _Delegate.alloc().initWithHandler_(self._closing)
         self.window = self._build()
+        self._text_delegate = _TextDelegate.alloc().initWithHandler_(self._escape)
+        self.body.setDelegate_(self._text_delegate)
         # Hooked up after construction: _escape reads self.window.
         self.window.escape_handler = self._escape
 
@@ -204,12 +232,20 @@ class QuickDictateWindow:
     def start(self) -> None:
         self._base = str(self.body.string()).strip()
         self._result = None
+        self._generation += 1
+        gen = self._generation
+
+        def current() -> bool:
+            return gen == self._generation
+
         try:
             self._session = self.controller.start_live(
                 on_update=lambda committed, preview: run_on_main(
-                    lambda: self._show_live(committed, preview)),
-                on_finished=lambda result: run_on_main(lambda: self._finished(result)),
-                on_error=lambda message: run_on_main(lambda: self._failed(message)),
+                    lambda: current() and self._show_live(committed, preview)),
+                on_finished=lambda result: run_on_main(
+                    lambda: current() and self._finished(result)),
+                on_error=lambda message: run_on_main(
+                    lambda: current() and self._failed(message)),
             )
         except RuntimeError as exc:
             self._failed(str(exc))
@@ -235,10 +271,15 @@ class QuickDictateWindow:
         settled = _join(self._base, committed)
         self._set_text(_join(settled, preview), grey_from=len(settled) if preview else None)
 
+    def _detach(self) -> None:
+        """Forget the session, and tell the controller -- if it is still ours."""
+        session, self._session = self._session, None
+        if session is not None and self.controller.live is session:
+            self.controller.live = None
+
     def _finished(self, result) -> None:
         self._result = result
-        self._session = None
-        self.controller.live = None
+        self._detach()
         self._set_text(_join(self._base, result.text))
         self.body.setEditable_(True)
         self.record_button.setEnabled_(True)
@@ -253,8 +294,7 @@ class QuickDictateWindow:
         self.body.setSelectedRange_((end, 0))
 
     def _failed(self, message: str) -> None:
-        self._session = None
-        self.controller.live = None
+        self._detach()
         self.body.setEditable_(True)
         self.record_button.setEnabled_(True)
         self.record_button.setTitle_("Start")
@@ -296,8 +336,8 @@ class QuickDictateWindow:
         self._set_status("Ready", T.STATUS_IDLE)
 
     def _failed_quietly(self) -> None:
-        self._session = None
-        self.controller.live = None
+        self._generation += 1  # anything still on its way from it is stale
+        self._detach()
         self.body.setEditable_(True)
         self.record_button.setEnabled_(True)
         self.meter.stop()
@@ -332,9 +372,15 @@ class QuickDictateWindow:
             try:
                 self.controller.injector.deliver(text)
             except Exception as exc:  # reported, and the text is still here
-                run_on_main(lambda: self._failed(f"Could not paste: {exc}"))
+                run_on_main(lambda: self._paste_failed(str(exc)))
 
         threading.Thread(target=deliver, name="aloud-quick-paste", daemon=True).start()
+
+    def _paste_failed(self, message: str) -> None:
+        self.window.makeKeyAndOrderFront_(None)
+        self._set_status("Could not paste", T.STATUS_ERROR)
+        self.hint.setStringValue_(f"{message} The text is still here; Copy it instead.")
+        self.hint.setTextColor_(T.ns_color(T.STATUS_ERROR))
 
     def save(self) -> None:
         """Keep the text in Transcripts, titled by how it starts."""

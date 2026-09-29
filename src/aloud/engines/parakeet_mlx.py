@@ -143,6 +143,11 @@ class ParakeetMLXEngine(TranscriptionEngine):
         #: (doctor, the status menu) that never touch MLX at all.
         self._mlx_thread: Optional[_MLXThread] = None
         self._mlx_thread_lock = threading.Lock()
+        #: Files being streamed right now, and whether close() was asked for
+        #: meanwhile. A stream keeps its own thread for its whole life; see
+        #: transcribe().
+        self._streams = 0
+        self._close_pending = False
 
     # -- contract ----------------------------------------------------------
 
@@ -189,6 +194,11 @@ class ParakeetMLXEngine(TranscriptionEngine):
         flight finishes normally first.
         """
         with self._mlx_thread_lock:
+            if self._streams:
+                # A file is mid-stream on this model. Closing now would make
+                # its next chunk start a second MLX thread; close when it ends.
+                self._close_pending = True
+                return
             thread, self._mlx_thread = self._mlx_thread, None
         if thread is None:
             self._model = None
@@ -232,19 +242,33 @@ class ParakeetMLXEngine(TranscriptionEngine):
         # whole file, so a dictation made meanwhile -- which uses the same
         # model -- waited until the sermon finished. Now a dictation waits
         # for at most one chunk (a few seconds of audio) before its turn.
-        model = self._mlx(self._load)
-        started = time.monotonic()
-        mode = "streamed"
+        with self._mlx_thread_lock:
+            if self._mlx_thread is None:
+                self._mlx_thread = _MLXThread()
+            thread = self._mlx_thread
+            self._streams += 1
         try:
-            text, segments = self._streamed(model, wav_path, on_progress)
-        except _StreamingUnavailable as exc:
-            # Never a reason to fail the transcription: the one-pass call is
-            # the same call this engine has always made. The user loses the
-            # live words, not the result.
-            log.info("Parakeet streaming unavailable (%s); using one pass", exc)
-            on_progress("", 0.0, 0.0)
-            text, segments = self._mlx(self._whole, model, wav_path)
-            mode = "whole"
+            model = thread.call(self._load)
+            started = time.monotonic()
+            mode = "streamed"
+            try:
+                text, segments = self._streamed(model, wav_path, on_progress, thread.call)
+            except _StreamingUnavailable as exc:
+                # Never a reason to fail the transcription: the one-pass call
+                # is the same call this engine has always made. The user loses
+                # the live words, not the result.
+                log.info("Parakeet streaming unavailable (%s); using one pass", exc)
+                on_progress("", 0.0, 0.0)
+                text, segments = thread.call(self._whole, model, wav_path)
+                mode = "whole"
+        finally:
+            with self._mlx_thread_lock:
+                self._streams -= 1
+                close_now = self._close_pending and not self._streams
+                if close_now:
+                    self._close_pending = False
+            if close_now:
+                self.close()
         return Transcript(
             text=text.strip(),
             engine=self.name,
@@ -301,7 +325,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
                 continue
         return found
 
-    def _streamed(self, model, wav_path: Path, on_progress):
+    def _streamed(self, model, wav_path: Path, on_progress, call=None):
         """Feed the file through ``transcribe_stream`` a chunk at a time.
 
         Anything that says the installed parakeet-mlx is not shaped the way
@@ -313,6 +337,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
             import mlx.core as mx
         except ImportError as exc:  # pragma: no cover - needs Apple Silicon
             raise _StreamingUnavailable(f"mlx is not importable: {exc}") from exc
+        call = call or self._mlx
 
         samples, rate = self._read_wav(wav_path)
         total = len(samples) / float(rate) if rate else 0.0
@@ -321,7 +346,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
         segments: list = []
 
         try:
-            stream_context = self._mlx(model.transcribe_stream)
+            stream_context = call(model.transcribe_stream)
         except (AttributeError, TypeError) as exc:  # pragma: no cover
             raise _StreamingUnavailable(f"transcribe_stream: {exc}") from exc
 
@@ -335,11 +360,11 @@ class ParakeetMLXEngine(TranscriptionEngine):
 
         # The context is entered and left explicitly rather than with `with`,
         # because every step has to run on the MLX thread as its own turn.
-        stream = self._mlx(stream_context.__enter__)
+        stream = call(stream_context.__enter__)
         failure = None
         try:
             for index, chunk in enumerate(self._chunks(samples, step), start=1):
-                text, segments = self._mlx(feed, stream, chunk)
+                text, segments = call(feed, stream, chunk)
                 done = min(total, index * step / float(rate)) if rate else 0.0
                 if not on_progress(text, done, total):
                     log.info("Transcription cancelled after %.1fs of audio", done)
@@ -351,7 +376,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
             raise EngineError(f"Parakeet transcription failed: {exc}") from exc
         finally:
             try:
-                self._mlx(stream_context.__exit__, type(failure) if failure else None,
+                call(stream_context.__exit__, type(failure) if failure else None,
                           failure, None)
             except Exception:
                 log.debug("Closing the Parakeet stream failed", exc_info=True)

@@ -35,6 +35,7 @@ _QUARTZ_CONSTANTS = {
     "kCGEventTapDisabledByTimeout": 0xFFFFFFFE,
     "kCGEventTapDisabledByUserInput": 0xFFFFFFFF,
     "kCGEventFlagsChanged": 12,
+    "kCGEventKeyDown": 10,
     "kCGSessionEventTap": 1,
     "kCGHeadInsertEventTap": 0,
     "kCGEventTapOptionListenOnly": 1,
