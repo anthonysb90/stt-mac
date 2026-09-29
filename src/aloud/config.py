@@ -47,6 +47,11 @@ DEFAULTS: Dict[str, Any] = {
     # "auto" picks the best engine for this machine: Parakeet on Apple
     # Silicon, faster-whisper on Intel. Name one explicitly to override.
     "engine": "auto",
+    # The engine for transcribing files. "same" uses the dictation engine;
+    # name another to, say, dictate locally and send long recordings to a
+    # cloud service with speaker labels. Loaded on first use, not at launch,
+    # so choosing a second local model costs no memory until you need it.
+    "file_engine": "same",
     "engines": {
         "parakeet_mlx": {
             # Apple Silicon only. Weights are fetched from Hugging Face on
@@ -89,6 +94,47 @@ DEFAULTS: Dict[str, Any] = {
             "api_key_env": "OPENAI_API_KEY",
             "language": "en",
             "timeout": 30,
+            # Long files are uploaded in pieces this long, to stay under the
+            # 25 MB limit. 0 sends the file whole.
+            "chunk_seconds": 600,
+            # "auto" asks Whisper models for segment timings (subtitles);
+            # gpt-4o transcribe models cannot provide them.
+            "timestamps": "auto",
+        },
+        "groq": {
+            # Cloud. Whisper on Groq's hardware: fast and inexpensive.
+            "base_url": "https://api.groq.com/openai/v1",
+            # whisper-large-v3-turbo · whisper-large-v3
+            "model": "whisper-large-v3-turbo",
+            "api_key_env": "GROQ_API_KEY",
+            # Blank detects the language.
+            "language": "",
+            "timeout": 30,
+            "chunk_seconds": 600,
+            "timestamps": "auto",
+        },
+        "assemblyai": {
+            # Cloud. Built for recordings: speaker labels are included.
+            "base_url": "https://api.assemblyai.com/v2",
+            # Blank uses AssemblyAI's default model. Set e.g. "universal".
+            "speech_model": "",
+            "api_key_env": "ASSEMBLYAI_API_KEY",
+            # Blank detects the language; "en_us", "es", … to pin it.
+            "language": "",
+            "speaker_labels": True,
+            "timeout": 30,
+            "poll_seconds": 3,
+        },
+        "elevenlabs": {
+            # Cloud. ElevenLabs Scribe: word timings and speaker labels.
+            "base_url": "https://api.elevenlabs.io/v1",
+            "model": "scribe_v1",
+            "api_key_env": "ELEVENLABS_API_KEY",
+            # Blank detects the language; ISO code ("en", "spa") to pin it.
+            "language": "",
+            "diarize": True,
+            "tag_audio_events": False,
+            "timeout": 60,
         },
         "deepgram": {
             # Cloud. Uploads your audio, and does the cleanup server-side.
@@ -108,6 +154,8 @@ DEFAULTS: Dict[str, Any] = {
             "measurements": False,
             "dictation": True,        # spoken "period" / "new line"
             "profanity_filter": False,
+            # Label who said what. Billed by Deepgram as an add-on.
+            "diarize": False,
         },
         "mock": {"text": "This is mock transcription output."},
     },

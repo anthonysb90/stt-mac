@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence, Tuple
 
 from ..corrections import bias_prompt
-from .base import EngineError, Transcript, TranscriptionEngine
+from .base import EngineError, Segment, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
 
@@ -80,10 +80,16 @@ class FasterWhisperEngine(TranscriptionEngine):
             )
             total = float(getattr(info, "duration", 0.0) or 0.0)
             pieces = []
+            timed = []
             for segment in segments:
                 piece = segment.text.strip()
                 if piece:
                     pieces.append(piece)
+                    timed.append(Segment(
+                        float(getattr(segment, "start", 0.0) or 0.0),
+                        float(getattr(segment, "end", 0.0) or 0.0),
+                        piece,
+                    ))
                 if on_progress is not None:
                     keep_going = on_progress(
                         " ".join(pieces), float(getattr(segment, "end", 0.0) or 0.0), total
@@ -102,6 +108,7 @@ class FasterWhisperEngine(TranscriptionEngine):
             duration=time.monotonic() - started,
             language=getattr(info, "language", "") or (language or ""),
             meta={"model": self._model_id()},
+            segments=timed,
         )
 
     # -- internals ---------------------------------------------------------

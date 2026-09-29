@@ -4,6 +4,21 @@ Kept as a first-class peer to the local engine for two reasons: it is the
 fastest path on the Intel Mac, where whisper.cpp has no GPU to fall back on,
 and it makes the engine boundary real rather than theoretical.
 
+Groq serves the same endpoint shape with Whisper on its own hardware — faster
+and much cheaper — so :class:`GroqEngine` is this class with other defaults.
+
+Two things matter for files that do not matter for dictation:
+
+* **The 25 MB upload cap.** A 16 kHz mono WAV is ~1.9 MB a minute, so anything
+  over ~13 minutes was refused. Long audio is sent in chunks (ten minutes by
+  default), and each chunk's timestamps are shifted back into place. Chunks
+  are also what make progress and Cancel possible on an engine that otherwise
+  answers once, at the end.
+* **Timestamps.** Whisper models return segment timings when asked for
+  ``verbose_json``. The newer ``gpt-4o-*-transcribe`` models do not support
+  that format, so for them the transcript comes back as plain text and the
+  timed export formats are not offered.
+
 The request is built with urllib so the app gains no HTTP dependency. Audio is
 uploaded, so this engine is off by default -- switching to it is an explicit
 choice to send recordings to a third party.
@@ -11,42 +26,21 @@ choice to send recordings to a third party.
 
 from __future__ import annotations
 
-import json
 import logging
-import mimetypes
 import time
-import urllib.error
-import urllib.request
-import uuid
 from pathlib import Path
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
+from .. import media
 from ..corrections import bias_prompt
 from ..secrets import describe_source, read_key
-from .base import EngineError, Transcript, TranscriptionEngine
+from ._http import common_explanation, multipart, request_json, upload_timeout
+from .base import EngineError, Segment, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
 
-
-def _multipart(fields: dict[str, str], file_field: str, path: Path) -> Tuple[bytes, str]:
-    """Encode a multipart/form-data body. Returns ``(body, content_type)``."""
-    boundary = f"----aloud{uuid.uuid4().hex}"
-    parts: list[bytes] = []
-    for name, value in fields.items():
-        parts.append(
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
-            f"{value}\r\n".encode()
-        )
-    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    parts.append(
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="{file_field}"; filename="{path.name}"\r\n'
-        f"Content-Type: {content_type}\r\n\r\n".encode()
-    )
-    parts.append(path.read_bytes())
-    parts.append(f"\r\n--{boundary}--\r\n".encode())
-    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+#: Ten minutes of 16 kHz mono WAV is ~19 MB — under the 25 MB cap with room.
+DEFAULT_CHUNK_SECONDS = 600.0
 
 
 class OpenAIEngine(TranscriptionEngine):
@@ -55,6 +49,13 @@ class OpenAIEngine(TranscriptionEngine):
     needs_api_key = True
     api_key_env_default = "OPENAI_API_KEY"
     supports_bias = True
+    cloud = True
+    #: Chunked uploads report after each chunk; see the module docstring.
+    supports_progress = True
+
+    default_base_url = "https://api.openai.com/v1"
+    default_model = "whisper-1"
+    service = "OpenAI"
 
     # -- contract ----------------------------------------------------------
 
@@ -62,12 +63,12 @@ class OpenAIEngine(TranscriptionEngine):
         env_var = self.api_key_env
         if not self._api_key():
             return False, (
-                f"No API key (${env_var} unset). Paste one under Credentials in "
-                "Settings, or run `aloud key openai` — a Dock-launched app "
-                "cannot see your shell environment."
+                f"No {self.service} API key (${env_var} unset). Paste one under "
+                f"Credentials in Settings, or run `aloud key {self.name}` — a "
+                "Dock-launched app cannot see your shell environment."
             )
         source = describe_source(env_var, self.name)
-        return True, f"{self.options.get('model', 'whisper-1')} via {self._base_url()} · key from {source}"
+        return True, f"{self._model()} via {self._base_url()} · key from {source}"
 
     def transcribe(
         self,
@@ -80,19 +81,62 @@ class OpenAIEngine(TranscriptionEngine):
         if not ok:
             raise EngineError(detail)
 
-        fields = {
-            "model": str(self.options.get("model", "whisper-1")),
-            "response_format": "json",
-        }
+        started = time.monotonic()
+        chunks = self._chunks(wav_path)
+        total = sum(c.duration for c in chunks)
+        texts: List[str] = []
+        segments: List[Segment] = []
+        language = str(self.options.get("language", "") or "")
+        try:
+            for index, chunk in enumerate(chunks):
+                # The previous chunk's tail is the best prompt for this one:
+                # it carries names and spelling across the cut.
+                context = texts[-1][-200:] if texts else ""
+                payload = self._send(chunk.path, bias_terms, context)
+                piece = str(payload.get("text", "")).strip()
+                if piece:
+                    texts.append(piece)
+                segments.extend(
+                    s.shifted(chunk.offset) for s in self._segments(payload)
+                )
+                language = language or str(payload.get("language", "") or "")
+                if on_progress is not None and not on_progress(
+                    " ".join(texts), chunk.offset + chunk.duration, total
+                ):
+                    log.info("Cancelled after chunk %d of %d", index + 1, len(chunks))
+                    break
+        finally:
+            for chunk in chunks:
+                if chunk.path != wav_path:
+                    chunk.path.unlink(missing_ok=True)
+
+        return Transcript(
+            text=" ".join(texts).strip(),
+            engine=self.name,
+            duration=time.monotonic() - started,
+            language=language,
+            meta={"model": self._model(), "chunks": len(chunks)},
+            segments=segments,
+        )
+
+    # -- the request -------------------------------------------------------
+
+    def _send(self, path: Path, bias_terms: Sequence[str], context: str = "") -> dict:
+        fields = [
+            ("model", self._model()),
+            ("response_format", "verbose_json" if self._timed() else "json"),
+        ]
+        if self._timed():
+            fields.append(("timestamp_granularities[]", "segment"))
         language = self.options.get("language", "")
         if language:
-            fields["language"] = language
-        prompt = bias_prompt(bias_terms)
+            fields.append(("language", str(language)))
+        prompt = " ".join(p for p in (bias_prompt(bias_terms), context) if p).strip()
         if prompt:
-            fields["prompt"] = prompt
+            fields.append(("prompt", prompt))
 
-        body, content_type = _multipart(fields, "file", wav_path)
-        request = urllib.request.Request(
+        body, content_type = multipart(fields, "file", path)
+        return request_json(
             f"{self._base_url()}/audio/transcriptions",
             data=body,
             method="POST",
@@ -100,32 +144,71 @@ class OpenAIEngine(TranscriptionEngine):
                 "Authorization": f"Bearer {self._api_key()}",
                 "Content-Type": content_type,
             },
+            timeout=upload_timeout(float(self.options.get("timeout", 30)), len(body)),
+            explain=common_explanation(self.service, self.name),
+            service=self.service,
         )
 
-        started = time.monotonic()
+    def _timed(self) -> bool:
+        """Whether to ask for segment timings.
+
+        Only Whisper models accept ``verbose_json``; the gpt-4o transcribe
+        models reject it with a 400. ``timestamps: false`` in the config turns
+        it off for a compatible server that does not implement it.
+        """
+        setting = self.options.get("timestamps", "auto")
+        if setting in (False, "false", "off"):
+            return False
+        if setting in (True, "true", "on"):
+            return True
+        return "whisper" in self._model().lower()
+
+    @staticmethod
+    def _segments(payload: dict) -> List[Segment]:
+        found = []
+        for item in payload.get("segments") or []:
+            try:
+                text = str(item.get("text", "")).strip()
+                if text:
+                    found.append(Segment(float(item["start"]), float(item["end"]), text))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return found
+
+    def _chunks(self, wav_path: Path):
+        """Pieces small enough to upload. One piece when the file already is."""
+        seconds = float(self.options.get("chunk_seconds", DEFAULT_CHUNK_SECONDS) or 0)
+        if seconds <= 0 or wav_path.suffix.lower() != ".wav":
+            return [media.Chunk(path=wav_path, offset=0.0, duration=media.duration_of(wav_path))]
         try:
-            with urllib.request.urlopen(
-                request, timeout=float(self.options.get("timeout", 30))
-            ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:400]
-            raise EngineError(f"HTTP {exc.code} from the transcription API: {detail}") from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise EngineError(f"Transcription request failed: {exc}") from exc
+            return media.split_wav(wav_path, seconds)
+        except Exception as exc:  # an unreadable WAV: let the API say why
+            log.info("Could not split %s (%s); sending it whole", wav_path.name, exc)
+            return [media.Chunk(path=wav_path, offset=0.0, duration=0.0)]
 
-        return Transcript(
-            text=str(payload.get("text", "")).strip(),
-            engine=self.name,
-            duration=time.monotonic() - started,
-            language=language,
-            meta={"model": fields["model"]},
-        )
+    # -- options -----------------------------------------------------------
 
-    # -- internals ---------------------------------------------------------
+    def _model(self) -> str:
+        return str(self.options.get("model") or self.default_model)
 
     def _base_url(self) -> str:
-        return str(self.options.get("base_url", "https://api.openai.com/v1")).rstrip("/")
+        return str(self.options.get("base_url") or self.default_base_url).rstrip("/")
 
     def _api_key(self) -> str:
         return read_key(self.api_key_env, self.name)
+
+
+class GroqEngine(OpenAIEngine):
+    """Whisper on Groq's hardware, through the same OpenAI-shaped endpoint.
+
+    Much faster than OpenAI's own Whisper and a fraction of the price, which
+    makes it the natural cloud choice for long files. Every model it serves is
+    a Whisper model, so timestamps are always available.
+    """
+
+    name = "groq"
+    label = "Groq Whisper (cloud)"
+    api_key_env_default = "GROQ_API_KEY"
+    default_base_url = "https://api.groq.com/openai/v1"
+    default_model = "whisper-large-v3-turbo"
+    service = "Groq"

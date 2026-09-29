@@ -36,6 +36,11 @@ find-and-replace with none of the whole-word or longest-match guarantees in
 precisely the "don't corrupt real words" problem the correction pass exists to
 avoid. Corrections stay local, where they are tested.
 
+**Timestamps and speakers.** Deepgram returns every word with its timing, so
+a transcribed file comes back with segments for subtitles at no extra cost.
+``diarize`` (off by default, since it is billed as an add-on) labels who said
+each word, and the exports then mark speaker changes.
+
 This uploads your audio. That is the trade, and it is why the engine is never
 selected automatically.
 """
@@ -51,9 +56,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .. import segments as seg
 from ..media import mime_type
 from ..secrets import describe_source, read_key
-from .base import EngineError, Transcript, TranscriptionEngine
+from ._http import upload_timeout
+from .base import EngineError, Segment, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +78,7 @@ CLEANUP_FLAGS = (
     "measurements",
     "dictation",
     "profanity_filter",
+    "diarize",
 )
 
 #: Keyterm prompting is a Nova-3 feature, and the API rejects it outright when
@@ -85,6 +93,7 @@ class DeepgramEngine(TranscriptionEngine):
     needs_api_key = True
     api_key_env_default = "DEEPGRAM_API_KEY"
     supports_bias = True
+    cloud = True
     #: Deepgram punctuates, capitalises and strips fillers server-side, so the
     #: local post-processing stage stands down for those steps.
     handles_cleanup = True
@@ -115,9 +124,10 @@ class DeepgramEngine(TranscriptionEngine):
             raise EngineError(detail)
 
         url = f"{self._base_url()}/listen?{self._query(bias_terms)}"
+        audio = wav_path.read_bytes()
         request = urllib.request.Request(
             url,
-            data=wav_path.read_bytes(),
+            data=audio,
             method="POST",
             headers={
                 "Authorization": f"Token {self._api_key()}",
@@ -130,7 +140,8 @@ class DeepgramEngine(TranscriptionEngine):
         started = time.monotonic()
         try:
             with urllib.request.urlopen(
-                request, timeout=float(self.options.get("timeout", 30))
+                request,
+                timeout=upload_timeout(float(self.options.get("timeout", 30)), len(audio)),
             ) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
@@ -140,6 +151,7 @@ class DeepgramEngine(TranscriptionEngine):
 
         text, confidence = self._extract(payload)
         return Transcript(
+            segments=self._segments(payload),
             text=text,
             engine=self.name,
             duration=time.monotonic() - started,
@@ -196,6 +208,33 @@ class DeepgramEngine(TranscriptionEngine):
         paragraphs = alternative.get("paragraphs") or {}
         text = paragraphs.get("transcript") or alternative.get("transcript") or ""
         return str(text).strip(), float(alternative.get("confidence", 0.0) or 0.0)
+
+    @staticmethod
+    def _segments(payload: Dict[str, Any]) -> List[Segment]:
+        """Group Deepgram's per-word timings into readable segments.
+
+        ``punctuated_word`` is used when present, so the segments carry the
+        same punctuation and casing as the transcript. Never raises: a reply
+        without words still has its text, it just cannot be made into
+        subtitles.
+        """
+        try:
+            words = payload["results"]["channels"][0]["alternatives"][0].get("words") or []
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return []
+        timed = []
+        for item in words:
+            try:
+                speaker = item.get("speaker")
+                timed.append(seg.Word(
+                    start=float(item["start"]),
+                    end=float(item["end"]),
+                    text=str(item.get("punctuated_word") or item.get("word") or ""),
+                    speaker="" if speaker is None else str(speaker),
+                ))
+            except (KeyError, TypeError, ValueError, AttributeError):
+                continue
+        return seg.from_words(timed)
 
     @staticmethod
     def _explain(exc: urllib.error.HTTPError) -> str:

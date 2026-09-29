@@ -315,3 +315,51 @@ def duration_of(path: Path) -> float:
         return float(completed.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
         return 0.0
+
+
+@dataclass
+class Chunk:
+    """One slice of a longer WAV, and where it starts in the original."""
+
+    path: Path
+    offset: float
+    duration: float
+
+
+def split_wav(path: Path, seconds: float) -> list:
+    """Cut a WAV into pieces of at most ``seconds`` each, as temporary files.
+
+    For the APIs that cap uploads at 25 MB. A 16 kHz mono WAV is about
+    1.9 MB a minute, so without this anything past ~13 minutes was refused
+    outright. Slicing the PCM directly needs neither ffmpeg nor a re-encode,
+    and the offsets let the pieces' timestamps be put back together.
+
+    A file short enough to send whole comes back as a single chunk pointing at
+    the original, so callers treat both cases the same way. The caller deletes
+    every chunk whose path is not the original's.
+    """
+    path = Path(path)
+    with wave.open(str(path), "rb") as source:
+        rate = source.getframerate() or TARGET_SAMPLE_RATE
+        total = source.getnframes()
+        params = source.getparams()
+        per_chunk = max(1, int(rate * seconds))
+        if total <= per_chunk:
+            return [Chunk(path=path, offset=0.0, duration=total / float(rate))]
+
+        chunks = []
+        start = 0
+        while start < total:
+            frames = source.readframes(min(per_chunk, total - start))
+            handle = tempfile.NamedTemporaryFile(
+                prefix="aloud-chunk-", suffix=".wav", delete=False
+            )
+            handle.close()
+            target = Path(handle.name)
+            with wave.open(str(target), "wb") as out:
+                out.setparams(params)
+                out.writeframes(frames)
+            count = min(per_chunk, total - start)
+            chunks.append(Chunk(path=target, offset=start / float(rate), duration=count / float(rate)))
+            start += count
+        return chunks

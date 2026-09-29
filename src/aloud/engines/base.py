@@ -5,7 +5,28 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+
+@dataclass
+class Segment:
+    """A stretch of speech with its place in the audio.
+
+    Dictation never needs these -- the text goes straight into another app --
+    but a transcribed file does: subtitles and timestamped notes are built from
+    them. Times are seconds from the start of the file. ``speaker`` is set only
+    by engines that label speakers ("A", "1", "speaker_0" -- whatever the
+    service calls them).
+    """
+
+    start: float
+    end: float
+    text: str
+    speaker: str = ""
+
+    def shifted(self, offset: float) -> "Segment":
+        """The same segment, moved later by ``offset`` seconds."""
+        return Segment(self.start + offset, self.end + offset, self.text, self.speaker)
 
 
 @dataclass
@@ -17,6 +38,9 @@ class Transcript:
     duration: float = 0.0  # wall-clock seconds spent transcribing
     language: str = ""
     meta: Dict[str, Any] = field(default_factory=dict)
+    #: Timed pieces of ``text``, in order. Empty when the engine cannot say
+    #: where in the audio its words fell; exports then offer plain text only.
+    segments: List[Segment] = field(default_factory=list)
 
 
 class EngineError(RuntimeError):
@@ -51,6 +75,9 @@ class TranscriptionEngine(abc.ABC):
     #: honours spoken punctuation. When true the local post-processing steps
     #: that would duplicate that work are skipped.
     handles_cleanup: bool = False
+    #: Whether this backend uploads audio to a third party. Shown next to the
+    #: engine in Settings, and the reason no such engine is ever auto-selected.
+    cloud: bool = False
     #: Whether this backend can be primed with vocabulary before decoding.
     #: Whisper-family models take an initial prompt; Parakeet's CTC/TDT decoder
     #: has nowhere to put one. The Dictionary's correction pass is what covers

@@ -26,7 +26,7 @@ import wave
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence, Tuple
 
-from .base import EngineError, Transcript, TranscriptionEngine
+from .base import EngineError, Segment, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
 
@@ -201,10 +201,10 @@ class ParakeetMLXEngine(TranscriptionEngine):
         mode = "whole"
 
         if on_progress is None:
-            text = self._whole(model, wav_path)
+            text, segments = self._whole(model, wav_path)
         else:
             try:
-                text = self._streamed(model, wav_path, on_progress)
+                text, segments = self._streamed(model, wav_path, on_progress)
                 mode = "streamed"
             except _StreamingUnavailable as exc:
                 # Never a reason to fail the transcription: the one-pass call
@@ -212,7 +212,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
                 # the live words, not the result.
                 log.info("Parakeet streaming unavailable (%s); using one pass", exc)
                 on_progress("", 0.0, 0.0)
-                text = self._whole(model, wav_path)
+                text, segments = self._whole(model, wav_path)
 
         return Transcript(
             text=text.strip(),
@@ -220,18 +220,41 @@ class ParakeetMLXEngine(TranscriptionEngine):
             duration=time.monotonic() - started,
             language=str(self.options.get("language", "")),
             meta={"model": self._model_id(), "mode": mode},
+            segments=segments,
         )
 
     # -- decoding ----------------------------------------------------------
 
-    def _whole(self, model, wav_path: Path) -> str:
+    def _whole(self, model, wav_path: Path):
+        """``(text, segments)`` from one pass over the whole file."""
         try:
             result = model.transcribe(str(wav_path))
         except Exception as exc:
             raise EngineError(f"Parakeet transcription failed: {exc}") from exc
-        return str(getattr(result, "text", "") or "")
+        return str(getattr(result, "text", "") or ""), self._sentences(result)
 
-    def _streamed(self, model, wav_path: Path, on_progress) -> str:
+    @staticmethod
+    def _sentences(result) -> list:
+        """Timed sentences from parakeet-mlx's AlignedResult. Never raises.
+
+        The aligned result carries ``sentences``, each with ``text``, ``start``
+        and ``end`` in seconds. Anything else -- a bare string from an older
+        build, a sentence without times -- yields no segments rather than an
+        error: the transcript is still good without them.
+        """
+        found = []
+        for sentence in getattr(result, "sentences", None) or []:
+            try:
+                text = str(getattr(sentence, "text", "") or "").strip()
+                if text:
+                    found.append(Segment(
+                        float(getattr(sentence, "start")), float(getattr(sentence, "end")), text
+                    ))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return found
+
+    def _streamed(self, model, wav_path: Path, on_progress):
         """Feed the file through ``transcribe_stream`` a chunk at a time.
 
         Anything that says the installed parakeet-mlx is not shaped the way
@@ -248,6 +271,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
         total = len(samples) / float(rate) if rate else 0.0
         step = max(1, int(rate * self._chunk_seconds()))
         text = ""
+        segments: list = []
 
         try:
             stream_context = model.transcribe_stream()
@@ -262,6 +286,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
                     except (AttributeError, TypeError) as exc:  # pragma: no cover
                         raise _StreamingUnavailable(f"add_audio: {exc}") from exc
                     text = self._result_text(stream)
+                    segments = self._sentences(getattr(stream, "result", None))
                     done = min(total, index * step / float(rate)) if rate else 0.0
                     if not on_progress(text, done, total):
                         log.info("Transcription cancelled after %.1fs of audio", done)
@@ -271,7 +296,7 @@ class ParakeetMLXEngine(TranscriptionEngine):
         except Exception as exc:
             raise EngineError(f"Parakeet transcription failed: {exc}") from exc
 
-        return text
+        return text, segments
 
     @staticmethod
     def _result_text(stream) -> str:

@@ -93,6 +93,24 @@ indicator — a bar alone cannot tell slow from stuck. When it finishes, the sam
 window gains Copy and Save. The text is deliberately *not* typed into whatever
 app you had open.
 
+**Save** offers every format the transcript supports:
+
+| Format | When it is offered |
+| --- | --- |
+| Plain Text (`.txt`) | Always. Split by speaker when speakers were labelled |
+| Text with Timestamps (`.txt`) | `[0:12:04] Speaker 2: …` — when the engine reported timings |
+| Subtitles (`.srt`) | Same. Long lines are split to subtitle size (≤ 2 × 42 characters, ≤ 7 s) |
+| Web Subtitles (`.vtt`) | Same, with `<v Speaker>` voice tags |
+
+Every engine except the mock reports timings, with one exception: OpenAI's
+`gpt-4o-*-transcribe` models return text only, so they get plain text only.
+The Dictionary's corrections apply to the subtitles too, not just the text.
+
+**Files can use a different engine from dictation.** Settings → Model → *Files*.
+Dictate locally with Parakeet, say, and send a two-hour meeting to AssemblyAI
+for speaker labels. *Same as dictation* is the default. A second local model is
+loaded the first time a file needs it, not at launch.
+
 **Microphone** — pick the input from the transport strip or the menu bar. Both
 lists rebuild as they open, so a headset plugged in a moment ago is there.
 
@@ -100,7 +118,13 @@ lists rebuild as they open, so a headset plugged in a moment ago is there.
 copy installed from a zip can be attached to the repository in place, keeping
 its virtualenv and settings.
 
-**Settings** (`⌘,`) — the hotkey, the model, API keys for the cloud engines,
+**Models** (Aloud → Models…, or *Manage Models…* in Settings) — every local
+model for this Mac with its size and languages, a Download button with real
+progress and Cancel, Delete, and *Use* to make it its engine's model. Downloads
+go to `~/Library/Application Support/Aloud/models`. Weights already in the
+Hugging Face cache (from an earlier `make warm`) are found, not fetched again.
+
+**Settings** (`⌘,`) — the hotkey, the dictation and file engines, API keys for the cloud engines,
 and the start/stop sounds (which play as you pick them, since the only way to
 judge a cue is to hear it). Paste a key straight in; it is stored where a Dock-launched app can
 read it, which your shell environment is not. Everything else stays in
@@ -157,8 +181,12 @@ The CLI also works standalone, which is handy for isolating problems:
 ```sh
 .venv/bin/aloud doctor          # which engine is active, and why
 .venv/bin/aloud warm            # pre-load the model
-.venv/bin/aloud key deepgram    # store a cloud API key
-.venv/bin/aloud transcribe x.wav
+.venv/bin/aloud key deepgram    # store a cloud API key (also openai, groq, assemblyai, elevenlabs)
+.venv/bin/aloud transcribe talk.mp4                      # any audio or video; uses the file engine
+.venv/bin/aloud transcribe talk.mp4 --format srt -o talk.srt
+.venv/bin/aloud transcribe talk.mp4 --engine assemblyai --format timestamped
+.venv/bin/aloud models                                   # local models, and which are downloaded
+.venv/bin/aloud models download large-v3-turbo
 .venv/bin/aloud history -n 20
 ```
 
@@ -207,8 +235,11 @@ the clipboard), `clipboard` (copy only).
 | `parakeet_mlx` | Apple Silicon only. Fastest local option, and doesn't hallucinate over silence |
 | `faster_whisper` | CPU, int8. The Intel default; also works on Apple Silicon |
 | `whisper_cpp` | Offline fallback. No Python ML stack, but reloads the model every dictation |
-| `deepgram` | Cloud. Transcription **and** cleanup in one call, plus keyterm prompting |
-| `openai` | Cloud. Whisper via an OpenAI-compatible endpoint |
+| `deepgram` | Cloud. Transcription **and** cleanup in one call, plus keyterm prompting. `diarize: true` for speakers |
+| `openai` | Cloud. Whisper via an OpenAI-compatible endpoint. Long files are sent in 10-minute pieces (the API caps uploads at 25 MB) |
+| `groq` | Cloud. Whisper Large v3 Turbo on Groq — fast and inexpensive. Same chunking as `openai` |
+| `assemblyai` | Cloud. Built for recordings: speaker labels included, language detected |
+| `elevenlabs` | Cloud. ElevenLabs Scribe: word timings, speaker labels, strong on accents and other languages |
 | `mock` | Fixed text, for testing the loop without a model |
 
 Cloud engines upload your audio, so they are never selected automatically.
@@ -268,8 +299,13 @@ rules, the latency budget, and who owns cleanup.
   a different app to macOS and the grant silently stops applying. `make
   tap-test` reports what the event tap actually receives when something is
   wrong.
-* **Never run anywhere** — live Deepgram and OpenAI calls. Both are covered by
-  tests against a recorded request shape, not against the services.
+* **Never run anywhere** — live Deepgram, OpenAI, Groq, AssemblyAI and
+  ElevenLabs calls, and model downloads from Hugging Face. All are tested
+  against a local server that plays the service (request shape, chunking,
+  polling, timings, errors, cancelled downloads), not against the services.
+* **Never run on a Mac yet** — the Models window, the file-engine setting in
+  Settings, and the format picker in the Save panel. Their logic is tested;
+  their layout has not been seen.
 
 Off-hardware the suite covers the hotkey state machine, the correction engine's
 matching and risk analysis, the Dictionary file format, per-architecture engine
@@ -341,7 +377,11 @@ src/aloud/
   hotkey.py       Quartz event tap, push-to-talk edges
   audio.py        microphone capture → WAV, plus the level the meter reads
   engines/        Parakeet/MLX · faster-whisper · whisper.cpp · Deepgram ·
-                  OpenAI · mock, plus per-architecture `auto` selection
+                  OpenAI · Groq · AssemblyAI · ElevenLabs · mock, plus
+                  per-architecture `auto` selection
+  segments.py     timed pieces of a transcript: grouping words, subtitle sizing
+  export.py       txt · timestamped txt · SRT · WebVTT
+  models.py       the local model catalog and its downloader
   dictionary.py   entries, and the hand-editable JSON behind them
   corrections.py  the correction pass and its risk analysis
   postprocess.py  fillers and spoken commands, skipped when the engine did them
@@ -351,7 +391,8 @@ src/aloud/
     tokens.py     the design system — the only file with values in it
     components.py token-driven building blocks
     main_window.py · history_view.py · dictionary_view.py
-    settings_window.py · menu_bar.py · app_menu.py · meter.py
+    settings_window.py · models_window.py · transcript_window.py
+    menu_bar.py · app_menu.py · meter.py
     formatting.py presentation logic with no AppKit in it
 scripts/          bootstrap · model download · icon · app build
 docs/             INSTALL · ARCHITECTURE · DESIGN

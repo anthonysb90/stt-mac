@@ -40,6 +40,7 @@ from .audio import AudioError, Recorder, wav_duration
 from .config import Config
 from .corrections import CorrectionResult
 from .dictionary import Dictionary
+from .engines.base import Segment, TranscriptionEngine
 from .feedback import Feedback
 from .injector import TextInjector
 from .postprocess import defer_to_engine, process
@@ -89,6 +90,11 @@ class Dictation:
     source: str = "microphone"
     #: The file's name, when this came from one.
     label: str = ""
+    #: Timed pieces of ``text``, corrected the same way. Files only; empty
+    #: when the engine gave no timings, which limits saving to plain text.
+    segments: List[Segment] = field(default_factory=list)
+    #: The human-readable engine name, for the transcript window.
+    engine_label: str = ""
 
     @property
     def was_corrected(self) -> bool:
@@ -145,6 +151,9 @@ class DictationController:
         )
         self.feedback = Feedback(config.get("feedback", {}))
         self.engine = engines.select(config)
+        #: Built on the first file that needs it; see files_engine().
+        self._file_engine: Optional[TranscriptionEngine] = None
+        self._file_engine_lock = threading.Lock()
         self.dictionary = dictionary if dictionary is not None else Dictionary.load()
         self._ruleset = corrections.ruleset_for(self.dictionary)
 
@@ -376,6 +385,7 @@ class DictationController:
             )
 
         wav_path = job.audio
+        engine = self.engine_for(job)
         started = time.monotonic()
         self._emit("on_job_started", job)
 
@@ -385,17 +395,19 @@ class DictationController:
             self._emit("on_progress", job, text, done, total)
             return not self._cancel_current.is_set()
 
-        streaming = job.source == "file" and getattr(self.engine, "supports_progress", False)
-        transcript = self.engine.transcribe(
+        streaming = job.source == "file" and getattr(engine, "supports_progress", False)
+        transcript = engine.transcribe(
             wav_path,
-            bias_terms=self.bias_terms(),
+            bias_terms=self.bias_terms(engine),
             on_progress=report if streaming else None,
         )
 
         # Corrections run on the raw transcript, before any other cleanup, so
         # the offsets they report point at what the engine actually produced.
+        options = self.postprocess_options(engine)
         result = self.corrections_for(transcript.text)
-        text = process(result.text, self.postprocess_options())
+        text = process(result.text, options)
+        segments = self._clean_segments(transcript.segments, options)
         elapsed = time.monotonic() - started
 
         if self._cancel_current.is_set() and job.source == "file":
@@ -428,6 +440,8 @@ class DictationController:
             corrections=[applied.to_dict() for applied in result.applied],
             source=job.source,
             label=job.label,
+            segments=segments,
+            engine_label=getattr(engine, "label", transcript.engine),
         )
         self._last = dictation
 
@@ -489,7 +503,23 @@ class DictationController:
 
     # -- cleanup and the dictionary ---------------------------------------
 
-    def postprocess_options(self) -> Dict[str, Any]:
+    def _clean_segments(self, segments: List[Segment], options: Dict[str, Any]) -> List[Segment]:
+        """Give the timed pieces the same corrections as the text.
+
+        Otherwise a saved subtitle file would say "cloud code" where the
+        transcript beside it says "Claude Code". Each segment is corrected on
+        its own, so a correction spanning a segment boundary is missed -- rare,
+        since segments break at sentences and pauses, and harmless when it
+        happens: the plain text still has it.
+        """
+        cleaned = []
+        for segment in segments:
+            text = process(self.corrections_for(segment.text).text, options)
+            if text.strip():
+                cleaned.append(Segment(segment.start, segment.end, text.strip(), segment.speaker))
+        return cleaned
+
+    def postprocess_options(self, engine: Optional[TranscriptionEngine] = None) -> Dict[str, Any]:
         """Local cleanup settings, narrowed when the engine did the work.
 
         Deepgram punctuates, capitalises and strips fillers server-side. Running
@@ -498,7 +528,8 @@ class DictationController:
         to already-punctuated text leaves stray line breaks.
         """
         options = self.config.get("postprocess", {}) or {}
-        if getattr(self.engine, "handles_cleanup", False):
+        engine = engine if engine is not None else self.engine
+        if getattr(engine, "handles_cleanup", False):
             return defer_to_engine(options)
         return dict(options)
 
@@ -526,12 +557,13 @@ class DictationController:
         self.dictionary.save()
         self.reload_rules()
 
-    def bias_terms(self) -> List[str]:
+    def bias_terms(self, engine: Optional[TranscriptionEngine] = None) -> List[str]:
+        engine = engine if engine is not None else self.engine
         if not self.config.get("dictionary.enabled", True):
             return []
         if not self.config.get("dictionary.bias.enabled", True):
             return []
-        if not getattr(self.engine, "supports_bias", False):
+        if not getattr(engine, "supports_bias", False):
             return []
         self.refresh_dictionary()
         return self.dictionary.bias_terms(int(self.config.get("dictionary.bias.max_terms", 12)))
@@ -543,6 +575,50 @@ class DictationController:
         return self._ruleset.apply(text)
 
     # -- engine ------------------------------------------------------------
+
+    def engine_for(self, job: "Job") -> TranscriptionEngine:
+        """Dictations use the dictation engine; files use the file engine."""
+        return self.files_engine() if job.source == "file" else self.engine
+
+    def file_engine_setting(self) -> str:
+        return str(self.config.get("file_engine", engines.SAME) or engines.SAME)
+
+    def files_engine(self) -> TranscriptionEngine:
+        """The engine for files, built the first time one is transcribed.
+
+        "same" -- or naming the engine dictation already resolved to -- hands
+        back the dictation engine itself. Building a second instance would load
+        the same model twice, which for Parakeet is several GB of memory for
+        nothing.
+
+        Otherwise the engine is built on demand and kept. Not at launch: a
+        second resident model is only worth its memory once there is a file.
+        An explicitly named engine is used even when it is not ready, the same
+        rule dictation follows -- the file window then says why it failed
+        rather than quietly transcribing with something else.
+        """
+        setting = self.file_engine_setting()
+        if setting == engines.SAME:
+            return self.engine
+        resolved = engines.resolve(setting)
+        if resolved == self.engine.name:
+            return self.engine
+        with self._file_engine_lock:
+            if self._file_engine is None or self._file_engine.name != resolved:
+                self._file_engine = engines.build(resolved, self.config.engine_options(resolved))
+            return self._file_engine
+
+    def use_file_engine(self, name: str) -> None:
+        """Choose the engine for files. Takes effect on the next file."""
+        self.config.set("file_engine", name)
+        self.config.save()
+        self.reset_file_engine()
+        log.info("File engine set to %s", name)
+
+    def reset_file_engine(self) -> None:
+        """Drop the cached file engine so a changed model or key is re-read."""
+        with self._file_engine_lock:
+            self._file_engine = None
 
     # -- input device ------------------------------------------------------
 
@@ -563,6 +639,7 @@ class DictationController:
         self.config.set("engine", name)
         self.config.save()
         self.engine = engines.select(self.config)
+        self.reset_file_engine()
         log.info("Switched engine to %s (%s)", name, self.engine.name)
         threading.Thread(target=self.engine.warm_up, daemon=True).start()
         self._emit("on_state", self.state)

@@ -27,7 +27,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from ..corrections import bias_prompt
 from ..paths import MODELS_DIR, VENDOR_DIR
-from .base import EngineError, Transcript, TranscriptionEngine
+from .base import EngineError, Segment, Transcript, TranscriptionEngine
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,11 @@ SEARCH_DIRS = (
 #: whisper.cpp prefixes each segment with a timestamp unless -nt is passed;
 #: strip any that survive (older builds ignore the flag in some modes).
 _TIMESTAMP_RE = re.compile(r"^\s*\[[\d:.\s\->]+\]\s*")
+
+#: One timed line: ``[00:01:02.340 --> 00:01:05.120]   text``.
+_TIMED_LINE_RE = re.compile(
+    r"^\s*\[(\d+):(\d{2}):(\d{2}(?:[.,]\d+)?)\s*-->\s*(\d+):(\d{2}):(\d{2}(?:[.,]\d+)?)\]\s*(.*)$"
+)
 
 #: Non-speech annotations Whisper emits for silence, music, and noise.
 _ANNOTATION_RE = re.compile(r"[\(\[][A-Z_ ]{2,}[\)\]]|\*[a-z ]+\*")
@@ -81,6 +86,30 @@ def find_model(configured: str = "") -> Optional[Path]:
         MODELS_DIR.glob("ggml-*.bin"), key=lambda p: p.stat().st_mtime, reverse=True
     )
     return models[0] if models else None
+
+
+def _seconds(hours: str, minutes: str, seconds: str) -> float:
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds.replace(",", "."))
+
+
+def parse_segments(raw: str) -> List[Segment]:
+    """Timed segments from CLI output that kept its timestamps.
+
+    Lines without a timestamp -- output from a build that ignored the flag, or
+    a wrapped continuation -- are skipped; the plain text is still built from
+    every line by :func:`clean_output`.
+    """
+    found = []
+    for line in raw.splitlines():
+        match = _TIMED_LINE_RE.match(line)
+        if not match:
+            continue
+        text = _ANNOTATION_RE.sub("", match.group(7)).strip()
+        if text:
+            found.append(Segment(
+                _seconds(*match.group(1, 2, 3)), _seconds(*match.group(4, 5, 6)), text
+            ))
+    return found
 
 
 def clean_output(raw: str) -> str:
@@ -154,6 +183,7 @@ class WhisperCppEngine(TranscriptionEngine):
 
         return Transcript(
             text=clean_output(completed.stdout),
+            segments=parse_segments(completed.stdout),
             engine=self.name,
             duration=time.monotonic() - started,
             language=self.options.get("language", "en"),
@@ -189,7 +219,8 @@ class WhisperCppEngine(TranscriptionEngine):
             str(self.binary),
             "-m", str(self.model),
             "-f", str(wav_path),
-            "--no-timestamps",
+            # Timestamps are kept: they become the segments for subtitles, and
+            # clean_output strips them from the plain text either way.
             "--no-prints",
         ]
         language = self.options.get("language", "en")

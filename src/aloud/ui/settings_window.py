@@ -29,27 +29,35 @@ MODE_LABELS = {"hold": "Hold to talk", "toggle": "Tap to start and stop"}
 #: Suggestions per engine, shown under the model field. Free text is allowed —
 #: these models change faster than this app will.
 MODEL_HINTS = {
-    "parakeet_mlx": "mlx-community/parakeet-tdt-0.6b-v3 · …-v2 is English-only and smaller",
-    "faster_whisper": "tiny.en · base.en · small.en · medium.en · large-v3",
-    "whisper_cpp": "Set a path to a ggml-*.bin file, or leave blank to use the newest",
+    "parakeet_mlx": "Pick and download models under Manage Models, or type a Hugging Face id",
+    "faster_whisper": "tiny.en · base.en · small.en · medium.en · large-v3-turbo — or Manage Models",
+    "whisper_cpp": "A path to a ggml-*.bin file, blank for the newest, or Manage Models",
     "deepgram": "nova-3 (needed for keyterm prompting) · nova-2 · whisper-large",
-    "openai": "whisper-1 · gpt-4o-transcribe",
+    "openai": "whisper-1 (timestamps) · gpt-4o-transcribe (no timestamps)",
+    "groq": "whisper-large-v3-turbo · whisper-large-v3",
+    "assemblyai": "Blank for AssemblyAI's default · universal · slam-1",
+    "elevenlabs": "scribe_v1",
     "mock": "Not used",
 }
+
+#: The file engine popup's first entry, and the config value behind it.
+SAME_LABEL = "Same as dictation"
 
 
 class SettingsWindow:
     """A small, single-panel settings window on Cmd-comma."""
 
-    def __init__(self, controller, on_hotkey_changed=None) -> None:
+    def __init__(self, controller, on_hotkey_changed=None, on_manage_models=None) -> None:
         self.controller = controller
         self.config = controller.config
         self._on_hotkey_changed = on_hotkey_changed
+        self._on_manage_models = on_manage_models
         self._keeper: list = []
         self.window: Optional[AppKit.NSWindow] = None
         self._model_field = None
         self._model_hint = None
         self._engine_detail = None
+        self._file_engine_detail = None
         #: name -> {"field", "status", "remove"}, one per key-taking service.
         self._key_rows: dict = {}
         self._start_popup = None
@@ -193,14 +201,41 @@ class SettingsWindow:
             lambda sender: self._set_model(sender.stringValue()), self._keeper,
         )
         self._model_hint = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True)
+
+        file_names = [engines.SAME] + engines.names()
+        file_labels = [SAME_LABEL] + [engines.REGISTRY[n].label for n in engines.names()]
+        current_file = self.controller.file_engine_setting()
+        file_popup = C.popup(
+            file_labels,
+            file_labels[file_names.index(current_file)] if current_file in file_names else SAME_LABEL,
+            lambda sender: self._set_file_engine(file_names[sender.indexOfSelectedItem()]),
+            self._keeper,
+        )
+        self._file_engine_detail = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True)
+        manage = C.button(
+            "Manage Models…", lambda _s: self._manage_models(), self._keeper
+        )
+        manage_row = C.stack([C.spacer(), manage], vertical=False, spacing=T.SPACE["md"])
         self._refresh_model_section()
 
         return self._section("Model", [
-            self._field_row("Engine", engine_popup),
+            self._field_row("Dictation", engine_popup),
             self._engine_detail,
             self._field_row("Model", self._model_field),
             self._model_hint,
+            self._field_row("Files", file_popup),
+            self._file_engine_detail,
+            manage_row,
         ])
+
+    def _set_file_engine(self, name: str) -> None:
+        self.controller.use_file_engine(name)
+        self._refresh_model_section()
+        self._refresh_credentials()
+
+    def _manage_models(self) -> None:
+        if self._on_manage_models is not None:
+            self._on_manage_models()
 
     def _active_engine_name(self) -> str:
         return self.controller.engine.name
@@ -233,6 +268,33 @@ class SettingsWindow:
         self._model_field.setStringValue_(self._current_model())
         self._model_field.setEnabled_(name != "mock")
         self._model_hint.setStringValue_(MODEL_HINTS.get(name, ""))
+        self._refresh_file_engine_detail()
+
+    def _refresh_file_engine_detail(self) -> None:
+        """Say what files will actually be transcribed with, and whether it can.
+
+        Asking the controller builds the file engine if it does not exist yet.
+        That is cheap: every engine loads its model lazily, on warm-up or first
+        use, never in its constructor -- so opening Settings loads nothing.
+        """
+        setting = self.controller.file_engine_setting()
+        if setting == engines.SAME:
+            text, ok = (
+                "Files are transcribed with the dictation engine. Pick another "
+                "to, say, dictate locally and send long recordings to a cloud "
+                "service with speaker labels."
+            ), True
+        else:
+            engine = self.controller.files_engine()
+            ok, detail = engine.check()
+            model = self.config.get(f"engines.{engine.name}.model", "")
+            model_note = f" Model: {model}." if model and not engine.cloud else ""
+            where = "Uploads your audio. " if engine.cloud else "Runs on this Mac. "
+            text = f"{'' if ok else '⚠ '}{where}{detail}.{model_note}"
+        self._file_engine_detail.setStringValue_(text)
+        self._file_engine_detail.setTextColor_(
+            T.ns_color(T.TEXT_TERTIARY if ok else T.STATUS_WARNING)
+        )
 
     # -- sounds ------------------------------------------------------------
 
@@ -322,7 +384,7 @@ class SettingsWindow:
         note = C.label(
             "Keys are kept in ~/Library/Application Support/Aloud/keys, readable "
             "only by you. Store one whenever you like — a service is only used "
-            "once you pick it as the Engine above.",
+            "once you pick it for dictation or files above.",
             T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True,
         )
 
@@ -365,6 +427,8 @@ class SettingsWindow:
 
     def _refresh_credentials(self) -> None:
         active = self._active_engine_name()
+        setting = self.controller.file_engine_setting()
+        for_files = "" if setting == engines.SAME else engines.resolve(setting)
         for name, row in self._key_rows.items():
             source = secrets.describe_source(self._key_env(name), name)
             stored = source != "not set"
@@ -376,9 +440,11 @@ class SettingsWindow:
                 color = T.STATUS_SUCCESS
             else:
                 text = "No key stored yet. Paste one above and press Save Key."
-                color = T.TEXT_TERTIARY if name != active else T.STATUS_WARNING
+                color = T.TEXT_TERTIARY if name not in (active, for_files) else T.STATUS_WARNING
             if name == active:
                 text += " This is the engine currently in use."
+            elif name == for_files:
+                text += " This is the engine that transcribes files."
             row["status"].setStringValue_(text)
             row["status"].setTextColor_(T.ns_color(color))
 
@@ -400,7 +466,8 @@ class SettingsWindow:
         """Re-read the key without a restart, but only where it can matter."""
         if name == self._active_engine_name():
             self.controller.use_engine(str(self.config.get("engine", engines.AUTO)))
-            self._refresh_model_section()
+        self.controller.reset_file_engine()
+        self._refresh_model_section()
         self._refresh_credentials()
 
     # -- appearance --------------------------------------------------------

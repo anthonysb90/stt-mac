@@ -34,6 +34,7 @@ from .ui import dock
 from .ui import transcript_window
 from .ui.main_window import MainWindow
 from .ui.menu_bar import MenuBarItem
+from .ui.models_window import ModelsWindow
 from .ui.settings_window import SettingsWindow
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class AloudDelegate(Foundation.NSObject):
         self.controller = DictationController(config)
         self.main_window = None
         self.settings = None
+        self.models_window = None
         self.menu_bar = None
         self._transcript_windows = []
         self._import_window = None
@@ -82,7 +84,12 @@ class AloudDelegate(Foundation.NSObject):
             on_settings=self.showSettings_,
             on_transcribe=self._begin_import,
         )
-        self.settings = SettingsWindow(self.controller, on_hotkey_changed=self._hotkey_changed)
+        self.models_window = ModelsWindow(self.controller, on_changed=self._models_changed)
+        self.settings = SettingsWindow(
+            self.controller,
+            on_hotkey_changed=self._hotkey_changed,
+            on_manage_models=lambda: self.models_window.show(),
+        )
         self.menu_bar = MenuBarItem(
             self.controller,
             {
@@ -194,9 +201,10 @@ class AloudDelegate(Foundation.NSObject):
         window = self._import_window
         if job.source != "file" or window is None:
             return
-        streaming = getattr(self.controller.engine, "supports_progress", False)
-        detail = "Transcribing…" if streaming else (
-            f"Transcribing with {self.controller.engine.label} — "
+        engine = self.controller.engine_for(job)
+        streaming = getattr(engine, "supports_progress", False)
+        detail = f"Transcribing with {engine.label}…" if streaming else (
+            f"Transcribing with {engine.label} — "
             f"this engine reports no progress until it finishes."
         )
         run_on_main(lambda: window.begin(detail))
@@ -262,6 +270,12 @@ class AloudDelegate(Foundation.NSObject):
             self.main_window.set_state(state)
 
     @objc.python_method
+    def _models_changed(self) -> None:
+        """A model was chosen or deleted in the Models window."""
+        if self.settings is not None and self.settings.window is not None:
+            self.settings._refresh_model_section()
+
+    @objc.python_method
     def _hotkey_changed(self) -> None:
         key = str(self.config.get("hotkey.key", "right_option"))
         mode = str(self.config.get("hotkey.mode", "hold"))
@@ -277,6 +291,9 @@ class AloudDelegate(Foundation.NSObject):
 
     def showSettings_(self, _sender):
         self.settings.show()
+
+    def showModels_(self, _sender):
+        self.models_window.show()
 
     def showHistory_(self, _sender):
         self.main_window.show()

@@ -24,11 +24,13 @@ import platform
 import sys
 from typing import Any, Dict, List, Type
 
-from .base import EngineError, Transcript, TranscriptionEngine
+from .assemblyai import AssemblyAIEngine
+from .base import EngineError, Segment, Transcript, TranscriptionEngine
 from .deepgram import DeepgramEngine
+from .elevenlabs import ElevenLabsEngine
 from .faster_whisper import FasterWhisperEngine
 from .mock import MockEngine
-from .openai_api import OpenAIEngine
+from .openai_api import GroqEngine, OpenAIEngine
 from .parakeet_mlx import ParakeetMLXEngine
 from .whisper_cpp import WhisperCppEngine
 
@@ -42,11 +44,16 @@ REGISTRY: Dict[str, Type[TranscriptionEngine]] = {
         WhisperCppEngine,
         DeepgramEngine,
         OpenAIEngine,
+        GroqEngine,
+        AssemblyAIEngine,
+        ElevenLabsEngine,
         MockEngine,
     )
 }
 
 AUTO = "auto"
+#: The file engine's default: transcribe files with whatever dictation uses.
+SAME = "same"
 
 #: Preference order for ``engine: "auto"``, best first, per architecture.
 AUTO_PREFERENCE: Dict[str, List[str]] = {
@@ -123,6 +130,8 @@ __all__ = [
     "DEFAULT_ENGINE",
     "EngineError",
     "REGISTRY",
+    "SAME",
+    "Segment",
     "Transcript",
     "TranscriptionEngine",
     "build",

@@ -46,6 +46,8 @@ def _cmd_doctor(config: Config) -> int:
               f"  (order: {' > '.join(engines.preferences())})")
     else:
         print(f"  engine      {configured}")
+    file_engine = str(config.get("file_engine", engines.SAME) or engines.SAME)
+    print(f"  files       {'same as dictation' if file_engine == engines.SAME else file_engine}")
 
     failures = 0
     for name in engines.names():
@@ -195,23 +197,123 @@ def _cmd_warm(config: Config) -> int:
     return 0 if ok else 1
 
 
-def _cmd_transcribe(config: Config, wav: Path) -> int:
-    from .postprocess import process
+def _cmd_transcribe(config: Config, path: Path, engine_name: str, fmt: str,
+                    output: Path | None) -> int:
+    """Transcribe any audio or video file, through the same path as the app.
 
-    if not wav.is_file():
-        print(f"No such file: {wav}", file=sys.stderr)
+    Uses the file engine unless ``--engine`` names another, applies the
+    Dictionary's corrections, and writes any export format.
+    """
+    from . import export, media
+    from .core import DictationController, Job
+    from .engines.base import EngineError
+
+    if not path.is_file():
+        print(f"No such file: {path}", file=sys.stderr)
         return 2
-    engine = engines.select(config)
-    try:
-        transcript = engine.transcribe(wav)
-    except engines.EngineError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    target_format = export.BY_KEY.get(fmt)
+    if target_format is None:
+        print(f"Unknown format {fmt!r}. Try: {', '.join(export.BY_KEY)}", file=sys.stderr)
+        return 2
+    if engine_name:
+        config.set("file_engine", engine_name)
+
+    # The controller without start(): no hotkey, no worker thread, no warm-up.
+    controller = DictationController(config)
+    engine = controller.files_engine()
+    ok, detail = engine.check()
+    if not ok:
+        print(f"{engine.name}: {detail}", file=sys.stderr)
         return 1
-    print(process(transcript.text, config.get("postprocess", {})))
-    print(
-        f"[{transcript.engine} · {transcript.duration:.2f}s]",
-        file=sys.stderr,
-    )
+
+    results: dict = {}
+
+    class _Listener:
+        def on_result(self, dictation):
+            results["dictation"] = dictation
+
+        def on_error(self, title, message):
+            results["error"] = f"{title}: {message}"
+
+        def on_progress(self, _job, _text, done, total):
+            if total > 0 and sys.stderr.isatty():
+                print(f"\r  {done / total:6.1%}", end="", file=sys.stderr, flush=True)
+
+    controller.add_observer(_Listener())
+    print(f"Transcribing {path.name} with {engine.label}…", file=sys.stderr)
+    try:
+        controller._run_job(Job(audio=path, deliver=False, source="file",
+                                label=path.name, prepare=True))
+    except (EngineError, media.MediaError) as exc:
+        results["error"] = str(exc)
+    if sys.stderr.isatty():
+        print("", file=sys.stderr)
+
+    if "error" in results or "dictation" not in results:
+        print(f"error: {results.get('error', 'no speech was recognised')}", file=sys.stderr)
+        return 1
+    dictation = results["dictation"]
+    try:
+        rendered = export.render(target_format, dictation.text, dictation.segments)
+    except ValueError as exc:
+        print(f"error: {exc}. Try --format txt.", file=sys.stderr)
+        return 1
+
+    if output is None:
+        sys.stdout.write(rendered)
+    else:
+        output.write_text(rendered, encoding="utf-8")
+        print(f"Wrote {output}", file=sys.stderr)
+    print(f"[{dictation.engine} · {dictation.seconds:.1f}s · "
+          f"{len(dictation.segments)} segments]", file=sys.stderr)
+    return 0
+
+
+def _cmd_models(action: str, name: str) -> int:
+    """List, download or delete local models: the Models window, in a terminal."""
+    from . import models
+
+    if action == "list":
+        for engine in (models.PARAKEET, models.FASTER_WHISPER, models.WHISPER_CPP):
+            available, reason = models.engine_available(engine)
+            print(f"{models.ENGINE_TITLES[engine]}" + ("" if available else f"  ({reason})"))
+            for model in models.for_engine(engine):
+                state = models.status(model)
+                print(f"  {'*' if state.installed else ' '} {model.model_id:<38} "
+                      f"{model.size_label:>8}  {model.languages:<22} {state.label}")
+        print("\n  * downloaded.  `aloud models download <name>` to fetch one.")
+        return 0
+
+    matches = [m for m in models.CATALOG if name in (m.model_id, m.key, m.repo)]
+    if not matches:
+        print(f"No model called {name!r}. `aloud models list` shows them.", file=sys.stderr)
+        return 2
+    model = matches[0]
+
+    if action == "delete":
+        removed = models.delete(model)
+        print(f"Deleted {model.title}." if removed else f"{model.title} was not downloaded.")
+        return 0
+
+    last = {"shown": -1}
+
+    def progress(done: int, total: int) -> bool:
+        percent = int(100 * done / total) if total else 0
+        if percent != last["shown"]:
+            last["shown"] = percent
+            print(f"\r  {percent:3d}%  {done / 1e6:,.0f} of {total / 1e6:,.0f} MB",
+                  end="", flush=True)
+        return True
+
+    print(f"Downloading {model.title} ({model.size_label})…")
+    try:
+        target = models.download(model, progress)
+    except (models.DownloadError, KeyboardInterrupt) as exc:
+        print(f"\nNot downloaded: {exc or 'cancelled'}", file=sys.stderr)
+        return 1
+    print(f"\nSaved to {target}")
+    print(f"Use it: set engines.{model.engine}.model to that path, or press Use in "
+          f"Aloud → Models.")
     return 0
 
 
@@ -264,12 +366,25 @@ def main(argv: list[str] | None = None) -> int:
         "tap-test", help="report what the global hotkey tap actually receives"
     )
     tap.add_argument("--seconds", type=float, default=20.0)
-    transcribe = sub.add_parser("transcribe", help="transcribe a WAV file and print it")
-    transcribe.add_argument("wav", type=Path)
+    transcribe = sub.add_parser(
+        "transcribe", help="transcribe an audio or video file and print or save it"
+    )
+    transcribe.add_argument("file", type=Path)
+    transcribe.add_argument("--engine", default="",
+                            help="engine to use instead of the configured file engine")
+    transcribe.add_argument("--format", default="txt",
+                            help="txt, timestamped, srt or vtt (default txt)")
+    transcribe.add_argument("-o", "--output", type=Path, default=None,
+                            help="write to this file instead of printing")
+    model_cmd = sub.add_parser("models", help="list, download or delete local models")
+    model_cmd.add_argument("action", choices=["list", "download", "delete"], nargs="?",
+                           default="list")
+    model_cmd.add_argument("name", nargs="?", default="",
+                           help="e.g. large-v3-turbo, or ggml-base.en.bin")
     hist = sub.add_parser("history", help="show recent dictations")
     hist.add_argument("-n", "--limit", type=int, default=10)
     key = sub.add_parser("key", help="store an API key for a cloud engine")
-    key.add_argument("engine", help="deepgram or openai")
+    key.add_argument("engine", help="deepgram, openai, groq, assemblyai or elevenlabs")
     key.add_argument("value", nargs="?", default="", help="the key; prompted for if omitted")
     key.add_argument("--forget", action="store_true", help="remove the stored key")
 
@@ -290,7 +405,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tap-test":
         return _cmd_tap_test(args.seconds)
     if args.command == "transcribe":
-        return _cmd_transcribe(config, args.wav)
+        return _cmd_transcribe(config, args.file, args.engine, args.format, args.output)
+    if args.command == "models":
+        if args.action != "list" and not args.name:
+            parser.error(f"models {args.action} needs a model name")
+        return _cmd_models(args.action, args.name)
     if args.command == "history":
         return _cmd_history(args.limit)
     if args.command == "key":

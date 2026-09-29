@@ -8,7 +8,10 @@ While it works: a progress bar, and the words arriving. Watching the transcript
 build is the honest progress indicator; a bar alone cannot distinguish slow
 from stuck, and on a CPU-only Mac an hour of audio is genuinely slow.
 
-When it finishes: the same text, plus Copy and Save.
+When it finishes: the same text, plus Copy and Save. Save offers every format
+the transcript can support — plain text always, and subtitles (SRT, WebVTT) or
+timestamped text when the engine reported where its words fell. The choice is
+a popup inside the save panel, so the file name's extension follows it.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from typing import Optional
 
 import AppKit
 
-from .. import APP_NAME
+from .. import APP_NAME, export
 from . import components as C
 from . import tokens as T
 from .formatting import clock, summarise
@@ -43,7 +46,7 @@ class TranscriptWindow:
 
         self.cancel_button = C.button("Cancel", lambda _s: self.cancel(), self._keeper)
         self.copy_button = C.button("Copy", lambda _s: self.copy(), self._keeper, prominent=True)
-        self.save_button = C.button("Save as Text…", lambda _s: self.save(), self._keeper)
+        self.save_button = C.button("Save…", lambda _s: self.save(), self._keeper)
         for finished_only in (self.copy_button, self.save_button):
             finished_only.setHidden_(True)
 
@@ -100,6 +103,11 @@ class TranscriptWindow:
         """One more segment has arrived."""
         if self._finished:
             return
+        if not text and done <= 0 and total <= 0:
+            # A heartbeat from an engine that cannot measure its progress
+            # (AssemblyAI while it polls). Still working; nothing new to show,
+            # and "0:00 so far" would read as stuck.
+            return
         self._set_body(text)
 
         if total > 0:
@@ -136,9 +144,12 @@ class TranscriptWindow:
         words = len(dictation.text.split())
         bits = [
             f"{words:,} word{'' if words == 1 else 's'}",
-            dictation.engine,
+            getattr(dictation, "engine_label", "") or dictation.engine,
             f"transcribed in {clock(dictation.seconds)}",
         ]
+        speakers = {s.speaker for s in getattr(dictation, "segments", []) if s.speaker}
+        if speakers:
+            bits.append(f"{len(speakers)} speaker{'' if len(speakers) == 1 else 's'}")
         if dictation.corrections:
             bits.append(summarise(dictation.corrections))
         self.status.setStringValue_(" · ".join(bits))
@@ -190,9 +201,38 @@ class TranscriptWindow:
 
     def save(self) -> None:
         text = self.dictation.text if self.dictation else str(self.body.string())
+        segments = list(getattr(self.dictation, "segments", []) or [])
+        formats = export.available(segments)
+        chosen = {"format": formats[0]}
+
         panel = AppKit.NSSavePanel.savePanel()
         panel.setNameFieldStringValue_(_suggested_name(self.title))
-        panel.setAllowedFileTypes_(["txt"])
+        panel.setAllowedFileTypes_([formats[0].extension])
+        panel.setExtensionHidden_(False)
+
+        def pick(sender) -> None:
+            fmt = formats[sender.indexOfSelectedItem()]
+            chosen["format"] = fmt
+            panel.setAllowedFileTypes_([fmt.extension])
+            stem = Path(str(panel.nameFieldStringValue())).stem or "transcript"
+            panel.setNameFieldStringValue_(f"{stem}.{fmt.extension}")
+
+        popup = C.popup([f.label for f in formats], formats[0].label, pick, self._keeper)
+        caption = C.label("Format", T.TYPE_BODY, T.TEXT_SECONDARY)
+        accessory = C.pad(
+            C.stack([caption, popup], vertical=False, spacing=T.SPACE["md"]),
+            T.INSET["control"],
+        )
+        # A save panel lays its accessory out by frame, not by constraints;
+        # handed a constraint-only view it can collapse it to nothing.
+        accessory.layoutSubtreeIfNeeded()
+        accessory.setTranslatesAutoresizingMaskIntoConstraints_(True)
+        accessory.setFrameSize_(accessory.fittingSize())
+        panel.setAccessoryView_(accessory)
+        if len(formats) == 1:
+            note = "Subtitles need timings, and this engine did not report any."
+            popup.setToolTip_(note)
+
         if panel.runModal() != AppKit.NSModalResponseOK:
             return
         url = panel.URL()
@@ -200,7 +240,7 @@ class TranscriptWindow:
             return
         target = Path(url.path())
         try:
-            target.write_text(text, encoding="utf-8")
+            target.write_text(export.render(chosen["format"], text, segments), encoding="utf-8")
         except OSError as exc:
             alert = AppKit.NSAlert.alloc().init()
             alert.setMessageText_("Could not save the transcript")
