@@ -394,8 +394,11 @@ class LiveSession:
 
         if not raw:
             return ""
+        from .voice import expand_snippets
+
         result = self.controller.corrections_for(raw)
-        return process(result.text, self.controller.postprocess_options(self.engine))
+        text = process(result.text, self.controller.postprocess_options(self.engine))
+        return expand_snippets(text, self.controller.config.get("snippets", {}) or {})
 
     def _result(self) -> LiveResult:
         raw = self.transcriber.text

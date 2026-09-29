@@ -364,6 +364,12 @@ class QuickDictateWindow:
                 "Copied. There was no other app in front when this opened, so "
                 "paste it with ⌘V wherever it is going.")
             return
+        from .. import voice
+
+        # Formatted for where it is going: no final period into Messages.
+        style = voice.style_for(str(target.bundleIdentifier() or ""),
+                                self.controller.config.get("app_styles", {}) or {})
+        text = voice.apply_style(text, style)
         self.window.orderOut_(None)
         target.activateWithOptions_(AppKit.NSApplicationActivateIgnoringOtherApps)
 

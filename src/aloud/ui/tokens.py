@@ -323,6 +323,7 @@ METRIC: Dict[str, float] = {
     "settings_height_min": 360,
     "models_width": 620,
     "export_note_width": 420,
+    "snippet_text_height": 110,
     "quick_width": 540,
     "quick_height": 320,
     "quick_width_min": 380,

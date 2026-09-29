@@ -43,7 +43,7 @@ from .corrections import CorrectionResult
 from .dictionary import Dictionary
 from .engines.base import Segment, TranscriptionEngine
 from .feedback import Feedback
-from .injector import TextInjector
+from .injector import TextInjector, frontmost_app as injector_frontmost
 from .postprocess import defer_to_engine, process
 
 log = logging.getLogger(__name__)
@@ -639,7 +639,24 @@ class DictationController:
             len(text), elapsed, transcript.engine, len(result.applied), job.source,
         )
         if job.deliver:
-            self.injector.deliver(text)
+            from . import voice
+
+            if voice.is_scratch(text):
+                outcome = self.injector.undo_last()
+                log.info("Scratch that: %s", outcome)
+                self._job_done(job)
+                self._emit("on_scratched", outcome)
+                return
+            text = voice.expand_snippets(text, self.config.get("snippets", {}) or {})
+            bundle, _pid = injector_frontmost()
+            style = voice.style_for(bundle, self.config.get("app_styles", {}) or {})
+            text = voice.apply_style(text, style)
+            default_space = bool(self.config.get("output.trailing_space", True))
+            space = voice.trailing_space(style, default_space)
+            if space == default_space:
+                self.injector.deliver(text)
+            else:
+                self.injector.deliver(text, trailing_space=space)
 
         with self._dictionary_lock:
             for applied in result.applied:

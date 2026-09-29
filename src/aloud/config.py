@@ -239,6 +239,13 @@ DEFAULTS: Dict[str, Any] = {
         },
     },
     "history": {"enabled": True, "max_entries": 500},
+    # Say "insert <trigger>" (or just the trigger) to type the text instead.
+    # e.g. {"my signature": "Pastor Anthony\nMission USA"}. Settings → Snippets.
+    "snippets": {},
+    # Formatting per app, by bundle identifier: "prose", "chat" (no final
+    # period) or "code" (exactly as spoken). Adds to or overrides the
+    # built-in list in aloud/voice.py (Messages, Slack, Terminal, VS Code…).
+    "app_styles": {},
     "watch": {
         # Folders whose new recordings are transcribed automatically. Set in
         # Settings → Watch Folders.

@@ -49,8 +49,12 @@ class CapturingInjector:
     def __init__(self) -> None:
         self.delivered: list[str] = []
 
-    def deliver(self, text: str) -> None:
+    def deliver(self, text: str, trailing_space=None) -> None:
         self.delivered.append(text)
+
+    def undo_last(self) -> str:
+        self.undone = getattr(self, "undone", 0) + 1
+        return "removed"
 
 
 def _rebuild(app):

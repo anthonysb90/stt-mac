@@ -24,6 +24,8 @@ import Quartz
 log = logging.getLogger(__name__)
 
 _V_KEYCODE = 9
+_Z_KEYCODE = 6
+_DELETE_KEYCODE = 51
 #: Unicode events carry the payload in a string, so the keycode is irrelevant.
 _UNICODE_KEYCODE = 0
 #: CGEventKeyboardSetUnicodeString is unreliable for very long strings.
@@ -108,6 +110,26 @@ def _post(event) -> None:
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
 
+def _send_key(keycode: int, flags: int = 0) -> None:
+    source = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStateHIDSystemState)
+    for is_down in (True, False):
+        event = Quartz.CGEventCreateKeyboardEvent(source, keycode, is_down)
+        if flags:
+            Quartz.CGEventSetFlags(event, flags)
+        _post(event)
+
+
+def frontmost_app() -> "tuple[str, int]":
+    """``(bundle identifier, process id)`` of the app in front, or ``("", 0)``."""
+    try:
+        app = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None:
+            return "", 0
+        return str(app.bundleIdentifier() or ""), int(app.processIdentifier())
+    except Exception:
+        return "", 0
+
+
 def send_command_v() -> None:
     source = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStateHIDSystemState)
     down = Quartz.CGEventCreateKeyboardEvent(source, _V_KEYCODE, True)
@@ -153,11 +175,17 @@ class TextInjector:
         self._original: Optional[Snapshot] = None
         self._last_payload: Optional[str] = None
         self._generation = 0
+        #: What was delivered last, where and when -- for "scratch that".
+        self.last_delivery: Optional[dict] = None
 
-    def deliver(self, text: str) -> None:
+    def deliver(self, text: str, trailing_space: Optional[bool] = None) -> None:
         if not text:
             return
-        payload = text + " " if self.trailing_space and not text.endswith(("\n", " ")) else text
+        space = self.trailing_space if trailing_space is None else trailing_space
+        payload = text + " " if space and not text.endswith(("\n", " ")) else text
+        bundle, pid = frontmost_app()
+        self.last_delivery = {"text": payload, "mode": self.mode, "pid": pid,
+                              "bundle": bundle, "at": time.monotonic()}
 
         if self.mode == "clipboard":
             write_clipboard(payload)
@@ -178,6 +206,34 @@ class TextInjector:
 
         if generation is not None:
             self._restore_later(generation, payload)
+
+    #: "Scratch that" reaches back this far and no further.
+    SCRATCH_WINDOW = 60.0
+
+    def undo_last(self) -> str:
+        """Remove the last dictation, if it is safe to. Returns what happened.
+
+        Safe means: within a minute, and the same app still in front. Pasted
+        text is one undo step in nearly every app, so ⌘Z removes it cleanly;
+        typed text is removed with one Delete per character.
+        """
+        last = self.last_delivery
+        if last is None:
+            return "nothing to scratch"
+        if time.monotonic() - last["at"] > self.SCRATCH_WINDOW:
+            return "too long ago"
+        _bundle, pid = frontmost_app()
+        if pid != last["pid"]:
+            return "a different app is in front"
+        self.last_delivery = None
+        if last["mode"] == "paste":
+            _send_key(_Z_KEYCODE, Quartz.kCGEventFlagMaskCommand)
+        elif last["mode"] == "type":
+            for _ in range(len(last["text"])):
+                _send_key(_DELETE_KEYCODE)
+        else:
+            return "clipboard mode types nothing to remove"
+        return "removed"
 
     def _take_snapshot(self) -> int:
         """Remember what to put back, once per run of quick dictations.

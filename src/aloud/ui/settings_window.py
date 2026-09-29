@@ -59,6 +59,7 @@ class SettingsWindow:
         #: Returns the running watch.Watcher, to mark a new folder's files.
         self._watcher = watcher or (lambda: None)
         self._watch_list = None
+        self._snippet_list = None
         self._keeper: list = []
         self.window: Optional[AppKit.NSWindow] = None
         self._model_field = None
@@ -97,6 +98,8 @@ class SettingsWindow:
                 self._credentials_section(),
                 C.separator(),
                 self._watch_section(),
+                C.separator(),
+                self._snippets_section(),
                 C.separator(),
                 self._sounds_section(),
                 C.separator(),
@@ -478,6 +481,84 @@ class SettingsWindow:
         self.controller.reset_file_engine()
         self._refresh_model_section()
         self._refresh_credentials()
+
+    # -- snippets ----------------------------------------------------------
+
+    def _snippets_section(self) -> AppKit.NSView:
+        """Text typed when you say its trigger: a signature, an address."""
+        self._snippet_list = C.stack([], spacing=T.SPACE["sm"])
+        add = C.button("Add Snippet…", lambda _s: self._add_snippet(), self._keeper)
+        add_row = C.stack([C.spacer(), add], vertical=False, spacing=T.SPACE["md"])
+        note = C.label(
+            "Say “insert my signature” — or just “my signature” on its own — and "
+            "the text is typed instead. Also: say “scratch that” on its own to remove "
+            "the dictation you just made (within a minute, in the same app).",
+            T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True,
+        )
+        self._refresh_snippets()
+        return self._section("Snippets", [self._snippet_list, add_row, note])
+
+    def _snippets(self) -> dict:
+        return dict(self.config.get("snippets", {}) or {})
+
+    def _refresh_snippets(self) -> None:
+        C.clear(self._snippet_list)
+        snippets = self._snippets()
+        if not snippets:
+            self._snippet_list.addArrangedSubview_(
+                C.label("No snippets yet.", T.TYPE_CALLOUT, T.TEXT_TERTIARY))
+            return
+        for trigger in sorted(snippets, key=str.lower):
+            first_line = snippets[trigger].strip().splitlines()[0] if snippets[trigger].strip() else ""
+            label = C.label(f"“{trigger}”  →  {first_line}", T.TYPE_BODY, T.TEXT_SECONDARY)
+            remove = C.button("Remove", lambda _s, t=trigger: self._remove_snippet(t),
+                              self._keeper)
+            row = C.stack([label, C.spacer(), remove], vertical=False, spacing=T.SPACE["md"])
+            self._snippet_list.addArrangedSubview_(row)
+            row.widthAnchor().constraintEqualToAnchor_(
+                self._snippet_list.widthAnchor()).setActive_(True)
+
+    def _add_snippet(self) -> None:
+        trigger_field = C.text_field("", "What you will say, e.g. my signature")
+        text_view = C.text_view("")
+        text_view.setEditable_(True)
+        scroll = C.text_scroller(text_view)
+        scroll.setBorderType_(AppKit.NSBezelBorder)
+        scroll.heightAnchor().constraintEqualToConstant_(
+            T.METRIC["snippet_text_height"]).setActive_(True)
+        form = C.stack([
+            C.label("Trigger", T.TYPE_BODY, T.TEXT_SECONDARY), trigger_field,
+            C.label("Text to type", T.TYPE_BODY, T.TEXT_SECONDARY), scroll,
+        ], spacing=T.SPACE["sm"])
+        for view in (trigger_field, scroll):
+            view.widthAnchor().constraintEqualToConstant_(
+                T.METRIC["export_note_width"]).setActive_(True)
+
+        alert = AppKit.NSAlert.alloc().init()
+        alert.setMessageText_("New snippet")
+        alert.setInformativeText_("Line breaks in the text are kept.")
+        alert.setAccessoryView_(C.fit_to_content(form))
+        alert.addButtonWithTitle_("Add")
+        alert.addButtonWithTitle_("Cancel")
+        alert.window().setInitialFirstResponder_(trigger_field)
+        if alert.runModal() != AppKit.NSAlertFirstButtonReturn:
+            return
+        trigger = " ".join(str(trigger_field.stringValue()).split()).strip(" .,!?").lower()
+        text = str(text_view.string())
+        if not trigger or not text.strip():
+            return
+        snippets = self._snippets()
+        snippets[trigger] = text
+        self.config.set("snippets", snippets)
+        self.config.save()
+        self._refresh_snippets()
+
+    def _remove_snippet(self, trigger: str) -> None:
+        snippets = self._snippets()
+        snippets.pop(trigger, None)
+        self.config.set("snippets", snippets)
+        self.config.save()
+        self._refresh_snippets()
 
     # -- watch folders -----------------------------------------------------
 
