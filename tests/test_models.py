@@ -254,3 +254,17 @@ def test_parakeet_is_unavailable_off_apple_silicon(monkeypatch):
     monkeypatch.setattr("aloud.models.platform.machine", lambda: "x86_64")
     ok, reason = models.engine_available(models.PARAKEET)
     assert not ok and "Apple Silicon" in reason
+
+
+def test_advice_differs_between_the_two_kinds_of_mac():
+    turbo = models.find("faster_whisper:large-v3-turbo")
+    base = models.find("faster_whisper:base.en")
+    assert "files" in models.advice(turbo, "x86_64")
+    assert "dictation" in models.advice(base, "x86_64")
+    assert models.advice(base, "arm64") == "", "Parakeet is the dictation pick there"
+    assert "dictation" in models.advice(models.find(PARAKEET_V3), "arm64")
+
+
+def test_every_piece_of_advice_names_a_real_model():
+    for (arch, key) in models.ADVICE:
+        assert arch in ("arm64", "x86_64") and models.find(key) is not None, key

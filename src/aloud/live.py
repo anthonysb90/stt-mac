@@ -182,9 +182,9 @@ class LiveTranscriber:
                 self._start_frame = now - keep
             return False
 
-        quiet_for = now - 1 - self._last_speech_frame
-        if quiet_for >= self._frames(self.pause):
-            cut = min(now, self._last_speech_frame + 1 + self._frames(PAD_SECONDS))
+        phrase_end = self._first_pause(start, now)
+        if phrase_end is not None:
+            cut = min(now, phrase_end + self._frames(PAD_SECONDS))
             self._commit(cut)
             return True
 
@@ -201,6 +201,27 @@ class LiveTranscriber:
                 self.preview = text.strip()
                 return True
         return False
+
+    def _first_pause(self, start: int, end: int) -> Optional[int]:
+        """Where the first finished phrase after ``start`` ends, if one has.
+
+        The *first*, not the latest: when transcription falls behind -- a slow
+        engine, a burst of audio -- looking only at the end of the buffer
+        missed the pauses in between, and the phrases ran together into one
+        long piece, which is exactly the wait this module exists to avoid.
+        """
+        needed = self._frames(self.pause)
+        seen_speech = False
+        quiet = 0
+        for index in range(start, end):
+            if self._speech[index]:
+                seen_speech = True
+                quiet = 0
+            elif seen_speech:
+                quiet += 1
+                if quiet >= needed:
+                    return index - quiet + 1  # the frame after the last speech
+        return None
 
     def finish(self) -> None:
         """Commit everything left. Call once recording has stopped."""
@@ -389,17 +410,101 @@ class LiveSession:
         )
 
     def _transcribe(self, pcm: bytes) -> Tuple[str, List[Segment]]:
-        handle = tempfile.NamedTemporaryFile(prefix="aloud-live-", suffix=".wav", delete=False)
-        handle.close()
-        path = Path(handle.name)
+        return transcribe_pcm(self.controller, self.engine, pcm)
+
+
+def transcribe_pcm(controller, engine, pcm: bytes) -> Tuple[str, List[Segment]]:
+    """Hand one phrase of raw audio to an engine."""
+    handle = tempfile.NamedTemporaryFile(prefix="aloud-live-", suffix=".wav", delete=False)
+    handle.close()
+    path = Path(handle.name)
+    try:
+        with wave.open(str(path), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(BYTES_PER_SAMPLE)
+            out.setframerate(SAMPLE_RATE)
+            out.writeframes(pcm)
+        transcript = engine.transcribe(path, bias_terms=controller.bias_terms(engine))
+        return transcript.text, list(transcript.segments)
+    finally:
+        path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Hotkey dictation, transcribed while the key is held
+# ---------------------------------------------------------------------------
+
+
+class DictationStream:
+    """Transcribes a hotkey dictation phrase by phrase while you speak.
+
+    Without it, the wait after releasing the key grew with how long you
+    talked: a minute of speech meant a minute of audio to transcribe after
+    the fact. With it, each phrase is done at the pause after it, and release
+    leaves only the last phrase -- the same speed-up Quick Dictate has, with
+    no preview (nobody is watching one).
+
+    The stream thread reads the recorder and commits phrases. On release the
+    controller stops it without waiting (the hotkey callback must return at
+    once); the dictation worker then calls :meth:`finish`, which waits for the
+    thread, adds the audio it had not reached yet, and transcribes the rest.
+    Any failure returns None, and the worker transcribes the WAV the old way.
+    """
+
+    TICK = 0.15
+
+    def __init__(self, controller, recorder) -> None:
+        self.controller = controller
+        self.engine = controller.engine
+        self.recorder = recorder
+        self.transcriber = LiveTranscriber(
+            lambda pcm: transcribe_pcm(controller, self.engine, pcm),
+            pause=float(controller.config.get("dictation.pause_seconds", DEFAULT_PAUSE)),
+            previews=False,
+        )
+        self.failed = False
+        self._stop = threading.Event()
+        self._cursor = 0
+        self._thread = threading.Thread(target=self._run, name="aloud-dictation-live",
+                                        daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
         try:
-            with wave.open(str(path), "wb") as out:
-                out.setnchannels(1)
-                out.setsampwidth(BYTES_PER_SAMPLE)
-                out.setframerate(SAMPLE_RATE)
-                out.writeframes(pcm)
-            transcript = self.engine.transcribe(
-                path, bias_terms=self.controller.bias_terms(self.engine))
-            return transcript.text, list(transcript.segments)
-        finally:
-            path.unlink(missing_ok=True)
+            while not self._stop.wait(self.TICK):
+                pcm, self._cursor = self.recorder.read_new(self._cursor)
+                if pcm:
+                    self.transcriber.feed(pcm)
+                self.transcriber.step()
+        except Exception:
+            log.exception("Live dictation failed; the whole recording will be used")
+            self.failed = True
+
+    def stop(self) -> None:
+        """Stop reading. Returns at once; safe from the hotkey callback."""
+        self._stop.set()
+
+    def finish(self, full_pcm: bytes, timeout: float = 120.0):
+        """The finished transcript, or None to fall back to the whole WAV."""
+        from .engines.base import Transcript
+
+        self._stop.set()
+        self._thread.join(timeout)
+        if self.failed or self._thread.is_alive():
+            return None
+        started = time.monotonic()
+        try:
+            rest = full_pcm[len(self.transcriber.audio):]
+            if rest:
+                self.transcriber.feed(rest)
+            self.transcriber.finish()
+        except Exception:
+            log.exception("Live dictation could not finish; using the whole recording")
+            return None
+        return Transcript(
+            text=self.transcriber.text,
+            engine=self.engine.name,
+            duration=time.monotonic() - started,
+            segments=self.transcriber.segments,
+            meta={"mode": "live", "phrases": len(self.transcriber.pieces)},
+        )

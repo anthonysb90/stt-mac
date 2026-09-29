@@ -56,6 +56,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .. import media
 from .. import segments as seg
 from ..media import mime_type
 from ..secrets import describe_source, read_key
@@ -124,7 +125,13 @@ class DeepgramEngine(TranscriptionEngine):
             raise EngineError(detail)
 
         url = f"{self._base_url()}/listen?{self._query(bias_terms)}"
-        audio = wav_path.read_bytes()
+        # Long files go up as FLAC: lossless, half the size. See media.compressed.
+        upload = media.compressed(wav_path, str(self.options.get("upload_format", "flac")))
+        try:
+            audio = upload.path.read_bytes()
+            content_type = mime_type(upload.path)
+        finally:
+            upload.cleanup()
         request = urllib.request.Request(
             url,
             data=audio,
@@ -133,7 +140,7 @@ class DeepgramEngine(TranscriptionEngine):
                 "Authorization": f"Token {self._api_key()}",
                 # Dictations are always WAV, but an imported file can be
                 # anything ffmpeg declined to convert.
-                "Content-Type": mime_type(wav_path),
+                "Content-Type": content_type,
             },
         )
 

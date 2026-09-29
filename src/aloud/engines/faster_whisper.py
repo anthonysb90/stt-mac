@@ -54,6 +54,8 @@ class FasterWhisperEngine(TranscriptionEngine):
     def close(self) -> None:
         """Drop the model. A transcription in progress holds its own reference."""
         self._model = None
+        self._pipeline = None
+        self._pipeline_model = None
 
     def warm_up(self) -> None:
         try:
@@ -72,16 +74,11 @@ class FasterWhisperEngine(TranscriptionEngine):
         started = time.monotonic()
         language = str(self.options.get("language", "") or "") or None
         prompt = bias_prompt(bias_terms) or None
+        audio = _samples(wav_path)
         try:
             # `segments` is a generator; iterating it is what does the work.
-            segments, info = model.transcribe(
-                str(wav_path),
-                language=language,
-                beam_size=int(self.options.get("beam_size", 1)),
-                vad_filter=bool(self.options.get("vad_filter", True)),
-                condition_on_previous_text=False,  # avoids run-on hallucinations
-                initial_prompt=prompt,
-            )
+            segments, info = self._run(model, audio if audio is not None else str(wav_path),
+                                       language, prompt, batched=on_progress is not None)
             total = float(getattr(info, "duration", 0.0) or 0.0)
             pieces = []
             timed = []
@@ -116,6 +113,46 @@ class FasterWhisperEngine(TranscriptionEngine):
         )
 
     # -- internals ---------------------------------------------------------
+
+    def _run(self, model, audio, language, prompt, batched: bool):
+        """Sequential for dictation; batched for files when available.
+
+        faster-whisper's BatchedInferencePipeline splits long audio at pauses
+        and decodes several pieces at once -- several times faster on a long
+        recording on CPU, which is the Intel Mac's whole situation. Dictation
+        is one short piece, where batching has nothing to batch.
+        """
+        options = dict(
+            language=language,
+            beam_size=int(self.options.get("beam_size", 1)),
+            initial_prompt=prompt,
+        )
+        if batched and self.options.get("batched", True):
+            pipeline = self._batched_pipeline(model)
+            if pipeline is not None:
+                try:
+                    return pipeline.transcribe(
+                        audio, batch_size=int(self.options.get("batch_size", 8)), **options)
+                except TypeError:
+                    log.info("This faster-whisper's batched mode takes other options; "
+                             "transcribing sequentially")
+        return model.transcribe(
+            audio,
+            vad_filter=bool(self.options.get("vad_filter", True)),
+            condition_on_previous_text=False,  # avoids run-on hallucinations
+            **options,
+        )
+
+    def _batched_pipeline(self, model):
+        if getattr(self, "_pipeline", None) is not None and self._pipeline_model is model:
+            return self._pipeline
+        try:
+            from faster_whisper import BatchedInferencePipeline
+        except ImportError:  # faster-whisper older than 1.1
+            return None
+        self._pipeline = BatchedInferencePipeline(model=model)
+        self._pipeline_model = model
+        return self._pipeline
 
     def _model_id(self) -> str:
         return str(self.options.get("model") or DEFAULT_MODEL)
@@ -157,3 +194,24 @@ class FasterWhisperEngine(TranscriptionEngine):
 
             log.info("faster-whisper ready in %.1fs", time.monotonic() - started)
             return self._model
+
+
+def _samples(wav_path: Path):
+    """16 kHz mono WAV as float32 samples, skipping faster-whisper's decoder.
+
+    Every dictation is already in exactly the format the model wants, so
+    decoding it again through PyAV is wasted time. Anything else -- another
+    rate, stereo, not a WAV -- returns None and goes through the path.
+    """
+    try:
+        import wave
+
+        import numpy as np
+
+        with wave.open(str(wav_path), "rb") as handle:
+            if (handle.getframerate(), handle.getnchannels(), handle.getsampwidth()) != (16000, 1, 2):
+                return None
+            frames = handle.readframes(handle.getnframes())
+        return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    except Exception:
+        return None

@@ -298,11 +298,52 @@ class ParakeetMLXEngine(TranscriptionEngine):
 
     def _whole(self, model, wav_path: Path):
         """``(text, segments)`` from one pass over the whole file."""
-        try:
-            result = model.transcribe(str(wav_path))
-        except Exception as exc:
-            raise EngineError(f"Parakeet transcription failed: {exc}") from exc
+        result = self._direct(model, wav_path)
+        if result is None:
+            try:
+                result = model.transcribe(str(wav_path))
+            except Exception as exc:
+                raise EngineError(f"Parakeet transcription failed: {exc}") from exc
         return str(getattr(result, "text", "") or ""), self._sentences(result)
+
+    #: Audio longer than this goes through parakeet-mlx's own transcribe(),
+    #: which splits long audio into overlapping chunks.
+    DIRECT_MAX_SECONDS = 60.0
+
+    def _direct(self, model, wav_path: Path):
+        """Decode a short WAV ourselves instead of via an ffmpeg process.
+
+        parakeet-mlx's transcribe() loads every file by running ffmpeg -- a
+        process launch per dictation, and with live dictation, per phrase.
+        Our WAVs are already 16 kHz mono PCM, so this reads the samples
+        directly and runs the same two steps transcribe() runs after loading:
+        a log-mel spectrogram, then generate().
+
+        Written against parakeet-mlx's internals, so it is guarded: anything
+        missing or shaped differently returns None, and the caller uses the
+        public transcribe() exactly as before. Never the only path.
+        """
+        if not self.options.get("direct_audio", True):
+            return None
+        try:
+            import mlx.core as mx
+            from parakeet_mlx.audio import get_logmel
+
+            samples, rate = self._read_wav(wav_path)
+            if not rate or len(samples) / float(rate) > self.DIRECT_MAX_SECONDS:
+                return None
+            config = model.preprocessor_config
+            if int(getattr(config, "sample_rate", rate)) != rate:
+                return None
+            chunk = next(iter(self._chunks(samples, max(len(samples), 1))), None)
+            if chunk is None:
+                return None
+            audio = mx.array(chunk).astype(mx.bfloat16)
+            results = model.generate(get_logmel(audio, config))
+            return results[0] if results else None
+        except Exception as exc:  # noqa: BLE001 - any mismatch means "use the public path"
+            log.debug("Direct Parakeet decode unavailable (%s); using transcribe()", exc)
+            return None
 
     @staticmethod
     def _sentences(result) -> list:

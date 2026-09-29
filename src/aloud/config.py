@@ -100,6 +100,12 @@ DEFAULTS: Dict[str, Any] = {
             # "auto" asks Whisper models for segment timings (subtitles);
             # gpt-4o transcribe models cannot provide them.
             "timestamps": "auto",
+            # Long pieces go up this many at a time. 1 sends them in order,
+            # each prompted with the end of the one before.
+            "parallel_uploads": 3,
+            # "flac" (lossless, about half the size), "opus" (much smaller,
+            # still clear speech) or "wav" (as recorded).
+            "upload_format": "flac",
         },
         "groq": {
             # Cloud. Whisper on Groq's hardware: fast and inexpensive.
@@ -233,6 +239,14 @@ DEFAULTS: Dict[str, Any] = {
         },
     },
     "history": {"enabled": True, "max_entries": 500},
+    "dictation": {
+        # Transcribe hotkey dictation phrase by phrase while you speak, so
+        # releasing the key leaves only the last phrase to do. False goes
+        # back to transcribing the whole recording after release.
+        "live": True,
+        # Quiet this long ends a phrase.
+        "pause_seconds": 0.7,
+    },
     "quick_dictate": {
         # Tap the hotkey twice quickly (hold mode) to open Quick Dictate from
         # any app.

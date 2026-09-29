@@ -168,7 +168,11 @@ class AssemblyAIEngine(TranscriptionEngine):
     # -- HTTP --------------------------------------------------------------
 
     def _upload(self, path: Path) -> str:
-        audio = path.read_bytes()
+        upload = media.compressed(path, str(self.options.get("upload_format", "flac")))
+        try:
+            audio = upload.path.read_bytes()
+        finally:
+            upload.cleanup()
         reply = request_json(
             f"{self._base_url()}/upload",
             data=audio,

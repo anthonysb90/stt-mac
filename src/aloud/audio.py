@@ -84,6 +84,22 @@ class Recorder:
         self._started_at = time.monotonic()
         log.debug("Recording started (%d Hz, %d ch)", self.sample_rate, self.channels)
 
+    def stop_with_pcm(self) -> "tuple[Optional[Path], bytes]":
+        """Stop, write the WAV, and hand back the raw audio too.
+
+        For live dictation, which has already transcribed most of the audio
+        and needs only what it has not seen yet.
+        """
+        if not self.recording:
+            return None, b""
+        self.halt()
+        with self._lock:
+            chunks, self._chunks = self._chunks, []
+        if not chunks:
+            return None, b""
+        pcm = b"".join(chunks)
+        return self._write_wav(pcm), pcm
+
     def stop(self) -> Optional[Path]:
         """Stop capture and write the audio to a temp WAV. None if nothing was captured."""
         if not self.recording:

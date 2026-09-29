@@ -87,6 +87,10 @@ class Job:
     #: Set to stop this job. Per job, so Cancel pressed while a file is still
     #: queued is not wiped out when the job ahead of it starts.
     cancel: threading.Event = field(default_factory=threading.Event)
+    #: A dictation transcribed while it was spoken (aloud.live.DictationStream),
+    #: and the raw audio it needs to finish. None for the whole-file path.
+    live: Optional[Any] = None
+    pcm: bytes = b""
 
 
 @dataclass
@@ -204,6 +208,8 @@ class DictationController:
         #: The Quick Dictate session, while one is listening.
         self.live = None
         self._last_short_tap = 0.0
+        #: The hotkey dictation being transcribed as it is spoken.
+        self._stream = None
 
     # -- observers ---------------------------------------------------------
 
@@ -349,6 +355,21 @@ class DictationController:
         self._set_state(State.RECORDING)
         self.feedback.recording_started()
         self._arm_max_duration()
+        self._stream = self._start_stream()
+
+    def _start_stream(self):
+        """Transcribe while the key is held, when the recorder allows it."""
+        if not self.config.get("dictation.live", True):
+            return None
+        if not hasattr(self.recorder, "read_new") or not hasattr(self.recorder, "stop_with_pcm"):
+            return None
+        try:
+            from .live import DictationStream
+
+            return DictationStream(self, self.recorder)
+        except Exception:
+            log.exception("Could not start live dictation; using the whole recording")
+            return None
 
     def finish_recording(self) -> None:
         if self.state is not State.RECORDING:
@@ -358,7 +379,13 @@ class DictationController:
             # Stopped from the button or the menu in toggle mode: without this
             # the next hotkey tap is taken as "stop" and does nothing.
             self.listener.reset()
-        wav_path = self.recorder.stop()
+        stream, self._stream = self._stream, None
+        pcm = b""
+        if stream is not None:
+            stream.stop()  # returns at once: this runs in the hotkey callback
+            wav_path, pcm = self.recorder.stop_with_pcm()
+        else:
+            wav_path = self.recorder.stop()
         self.feedback.recording_stopped()
 
         if wav_path is None:
@@ -375,7 +402,8 @@ class DictationController:
             return
 
         with self._state_lock:
-            self._jobs.put(Job(audio=wav_path, deliver=True, source="microphone"))
+            self._jobs.put(Job(audio=wav_path, deliver=True, source="microphone",
+                               live=stream, pcm=pcm))
             self._set_state(State.TRANSCRIBING)
 
     def discard_chord(self) -> None:
@@ -445,6 +473,9 @@ class DictationController:
         if self.state is not State.RECORDING:
             return
         self._disarm_max_duration()
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            stream.stop()
         self.recorder.cancel()
         if self.listener is not None:
             self.listener.reset()
@@ -563,11 +594,18 @@ class DictationController:
             return not job.cancel.is_set()
 
         streaming = job.source == "file" and getattr(engine, "supports_progress", False)
-        transcript = engine.transcribe(
-            wav_path,
-            bias_terms=self.bias_terms(engine),
-            on_progress=report if streaming else None,
-        )
+        transcript = None
+        if job.live is not None:
+            # Most of it was transcribed while the key was held; this does
+            # the last phrase. None means it failed: use the WAV instead.
+            engine = job.live.engine
+            transcript = job.live.finish(job.pcm)
+        if transcript is None:
+            transcript = engine.transcribe(
+                wav_path,
+                bias_terms=self.bias_terms(engine),
+                on_progress=report if streaming else None,
+            )
 
         # Corrections run on the raw transcript, before any other cleanup, so
         # the offsets they report point at what the engine actually produced.

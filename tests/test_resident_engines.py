@@ -729,3 +729,132 @@ def test_closing_mid_file_waits_for_the_file(tmp_path, monkeypatch, fake_mlx):
     transcript = engine.transcribe(wav, on_progress=progress)
     assert transcript.text and len(threads) == 1
     assert engine._model is None or engine._mlx_thread is None  # released afterwards
+
+
+# -- faster-whisper: direct audio, and batched files ---------------------------
+
+
+def test_faster_whisper_reads_our_wavs_directly(tmp_path):
+    np = pytest.importorskip("numpy")
+    from aloud.engines import faster_whisper as fw
+
+    wav = tmp_path / "a.wav"
+    _write_wav(wav, seconds=1.0)
+    samples = fw._samples(wav)
+    assert samples.dtype == np.float32 and len(samples) == 16000
+    assert abs(float(samples[0]) - 1000 / 32768.0) < 1e-6
+    other = tmp_path / "b.wav"
+    _write_wav(other, seconds=1.0, rate=44100)
+    assert fw._samples(other) is None, "anything else goes through the decoder"
+
+
+def _fake_faster_whisper(monkeypatch, calls):
+    import sys
+    import types
+    from types import SimpleNamespace as NS
+
+    class Pipeline:
+        def __init__(self, model):
+            self.model = model
+
+        def transcribe(self, audio, batch_size=8, **kwargs):
+            calls.append(("batched", batch_size))
+            return iter([NS(text=" Batched.", start=0.0, end=1.0)]), NS(duration=1.0, language="en")
+
+    module = types.ModuleType("faster_whisper")
+    module.BatchedInferencePipeline = Pipeline
+    monkeypatch.setitem(sys.modules, "faster_whisper", module)
+
+
+class _SequentialModel:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def transcribe(self, audio, **kwargs):
+        from types import SimpleNamespace as NS
+
+        self.calls.append(("sequential", kwargs.get("vad_filter")))
+        return iter([NS(text=" One.", start=0.0, end=1.0)]), NS(duration=1.0, language="en")
+
+
+def test_files_use_the_batched_pipeline_and_dictation_does_not(tmp_path, monkeypatch):
+    from aloud.engines.faster_whisper import FasterWhisperEngine
+
+    calls = []
+    _fake_faster_whisper(monkeypatch, calls)
+    engine = FasterWhisperEngine({})
+    model = _SequentialModel(calls)
+    monkeypatch.setattr(engine, "_load", lambda: model)
+    wav = tmp_path / "a.wav"
+    _write_wav(wav, seconds=1.0)
+
+    assert engine.transcribe(wav).text == "One."
+    assert engine.transcribe(wav, on_progress=lambda *_: True).text == "Batched."
+    assert calls == [("sequential", True), ("batched", 8)]
+
+
+def test_batching_can_be_turned_off(tmp_path, monkeypatch):
+    from aloud.engines.faster_whisper import FasterWhisperEngine
+
+    calls = []
+    _fake_faster_whisper(monkeypatch, calls)
+    engine = FasterWhisperEngine({"batched": False})
+    monkeypatch.setattr(engine, "_load", lambda: _SequentialModel(calls))
+    wav = tmp_path / "a.wav"
+    _write_wav(wav, seconds=1.0)
+    engine.transcribe(wav, on_progress=lambda *_: True)
+    assert calls == [("sequential", True)]
+
+
+def test_parakeet_falls_back_when_its_internals_are_not_there(tmp_path, monkeypatch):
+    """Without parakeet_mlx.audio the direct path steps aside, silently."""
+    engine = pk_module.ParakeetMLXEngine()
+    wav = tmp_path / "a.wav"
+    _write_wav(wav, seconds=1.0)
+    assert engine._direct(object(), wav) is None
+    model = _StreamingParakeet(stream=None, whole="the public path")
+    assert engine._whole(model, wav)[0] == "the public path"
+
+
+def test_parakeet_decodes_short_wavs_without_ffmpeg(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    calls = []
+
+    class Array:
+        def __init__(self, values):
+            self.values = values
+
+        def astype(self, dtype):
+            calls.append(("astype", dtype))
+            return self
+
+    core = types.ModuleType("mlx.core")
+    core.array = Array
+    core.bfloat16 = "bf16"
+    mlx = types.ModuleType("mlx")
+    mlx.core = core
+    audio = types.ModuleType("parakeet_mlx.audio")
+    audio.get_logmel = lambda a, config: calls.append(("mel", config.sample_rate)) or "mel"
+    package = types.ModuleType("parakeet_mlx")
+    package.audio = audio
+    for name, module in (("mlx", mlx), ("mlx.core", core), ("parakeet_mlx", package),
+                         ("parakeet_mlx.audio", audio)):
+        monkeypatch.setitem(sys.modules, name, module)
+
+    class Model:
+        preprocessor_config = type("C", (), {"sample_rate": 16000})()
+
+        def generate(self, mel):
+            calls.append(("generate", mel))
+            return [type("R", (), {"text": "direct", "sentences": []})()]
+
+        def transcribe(self, _path):
+            raise AssertionError("ffmpeg path used")
+
+    wav = tmp_path / "a.wav"
+    _write_wav(wav, seconds=2.0)
+    text, _segments = pk_module.ParakeetMLXEngine()._whole(Model(), wav)
+    assert text == "direct"
+    assert calls == [("astype", "bf16"), ("mel", 16000), ("generate", "mel")]

@@ -84,42 +84,15 @@ class OpenAIEngine(TranscriptionEngine):
         started = time.monotonic()
         chunks = self._chunks(wav_path)
         total = sum(c.duration for c in chunks)
-        texts: List[str] = []
-        segments: List[Segment] = []
         language = str(self.options.get("language", "") or "")
-        warning = ""
+        parallel = max(1, int(self.options.get("parallel_uploads", 3) or 1))
         try:
-            for index, chunk in enumerate(chunks):
-                # The previous chunk's tail is the best prompt for this one:
-                # it carries names and spelling across the cut.
-                context = texts[-1][-200:] if texts else ""
-                try:
-                    payload = self._send(chunk.path, bias_terms, context)
-                except EngineError as exc:
-                    if not texts:
-                        raise
-                    # Keep what was already transcribed -- and paid for --
-                    # rather than discarding it with the chunk that failed.
-                    from ..export import clock
-
-                    warning = (
-                        f"Stopped at {clock(chunk.offset)} of {clock(total)}: {exc} "
-                        "The text covers everything before that point."
-                    )
-                    log.warning("%s", warning)
-                    break
-                piece = str(payload.get("text", "")).strip()
-                if piece:
-                    texts.append(piece)
-                segments.extend(
-                    s.shifted(chunk.offset) for s in self._segments(payload)
-                )
-                language = language or str(payload.get("language", "") or "")
-                if on_progress is not None and not on_progress(
-                    " ".join(texts), chunk.offset + chunk.duration, total
-                ):
-                    log.info("Cancelled after chunk %d of %d", index + 1, len(chunks))
-                    break
+            if parallel > 1 and len(chunks) > 1:
+                texts, segments, language, warning = self._send_parallel(
+                    chunks, bias_terms, on_progress, total, language, parallel)
+            else:
+                texts, segments, language, warning = self._send_in_order(
+                    chunks, bias_terms, on_progress, total, language)
         finally:
             for chunk in chunks:
                 if chunk.path != wav_path:
@@ -133,6 +106,87 @@ class OpenAIEngine(TranscriptionEngine):
             meta={"model": self._model(), "chunks": len(chunks), "warning": warning},
             segments=segments,
         )
+
+    # -- sending the pieces -------------------------------------------------
+
+    def _send_in_order(self, chunks, bias_terms, on_progress, total, language):
+        """One piece after another, each prompted with the end of the last."""
+        texts: List[str] = []
+        segments: List[Segment] = []
+        warning = ""
+        for index, chunk in enumerate(chunks):
+            # The previous chunk's tail is the best prompt for this one: it
+            # carries names and spelling across the cut.
+            context = texts[-1][-200:] if texts else ""
+            try:
+                payload = self._send(chunk.path, bias_terms, context)
+            except EngineError as exc:
+                if not texts:
+                    raise
+                warning = self._partial_warning(chunk, total, exc)
+                break
+            self._collect(payload, chunk, texts, segments)
+            language = language or str(payload.get("language", "") or "")
+            if on_progress is not None and not on_progress(
+                " ".join(texts), chunk.offset + chunk.duration, total
+            ):
+                log.info("Cancelled after chunk %d of %d", index + 1, len(chunks))
+                break
+        return texts, segments, language, warning
+
+    def _send_parallel(self, chunks, bias_terms, on_progress, total, language, workers):
+        """Several pieces at once; results kept in order.
+
+        Uploading is most of the time on a long file, and the service is
+        happy to work on several pieces together. The cost is the chained
+        prompt -- each piece can no longer see the end of the one before --
+        which is why ``parallel_uploads: 1`` restores the one-at-a-time path.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        texts: List[str] = []
+        segments: List[Segment] = []
+        warning = ""
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="aloud-upload") as pool:
+            futures = [pool.submit(self._send, c.path, bias_terms, "") for c in chunks]
+            try:
+                for index, (chunk, future) in enumerate(zip(chunks, futures)):
+                    try:
+                        payload = future.result()
+                    except EngineError as exc:
+                        if not texts:
+                            raise
+                        warning = self._partial_warning(chunk, total, exc)
+                        break
+                    self._collect(payload, chunk, texts, segments)
+                    language = language or str(payload.get("language", "") or "")
+                    if on_progress is not None and not on_progress(
+                        " ".join(texts), chunk.offset + chunk.duration, total
+                    ):
+                        log.info("Cancelled after chunk %d of %d", index + 1, len(chunks))
+                        break
+            finally:
+                for future in futures:
+                    future.cancel()  # anything not yet started
+        return texts, segments, language, warning
+
+    def _collect(self, payload, chunk, texts, segments) -> None:
+        piece = str(payload.get("text", "")).strip()
+        if piece:
+            texts.append(piece)
+        segments.extend(s.shifted(chunk.offset) for s in self._segments(payload))
+
+    @staticmethod
+    def _partial_warning(chunk, total, exc) -> str:
+        """Keep what was already transcribed -- and paid for."""
+        from ..export import clock
+
+        warning = (
+            f"Stopped at {clock(chunk.offset)} of {clock(total)}: {exc} "
+            "The text covers everything before that point."
+        )
+        log.warning("%s", warning)
+        return warning
 
     # -- the request -------------------------------------------------------
 
@@ -150,7 +204,11 @@ class OpenAIEngine(TranscriptionEngine):
         if prompt:
             fields.append(("prompt", prompt))
 
-        body, content_type = multipart(fields, "file", path)
+        upload = media.compressed(path, str(self.options.get("upload_format", "flac")))
+        try:
+            body, content_type = multipart(fields, "file", upload.path)
+        finally:
+            upload.cleanup()
         return request_json(
             f"{self._base_url()}/audio/transcriptions",
             data=body,

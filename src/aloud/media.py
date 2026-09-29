@@ -418,3 +418,54 @@ def split_wav(path: Path, seconds: float) -> list:
             chunks.append(Chunk(path=target, offset=start / float(rate), duration=count / float(rate)))
             start += count
         return chunks
+
+
+#: Formats audio can be compressed to before uploading, and ffmpeg's
+#: arguments for each. FLAC is lossless -- the words cannot change -- at
+#: about half the size of WAV; Opus at 32 kbit/s is far smaller and, for
+#: speech, still clean enough for recognition.
+UPLOAD_FORMATS = {
+    "flac": (".flac", ["-c:a", "flac"]),
+    "opus": (".ogg", ["-c:a", "libopus", "-b:a", "32k", "-application", "voip"]),
+}
+
+#: Below this a WAV is sent as it is: compressing a few seconds of dictation
+#: costs more time than the upload it saves.
+COMPRESS_ABOVE_BYTES = 2_000_000
+
+
+def compressed(path: Path, fmt: str = "flac", minimum: int = COMPRESS_ABOVE_BYTES) -> Prepared:
+    """A smaller copy of ``path`` for uploading, or the original if not worth it.
+
+    Returns a :class:`Prepared` whose ``cleanup`` removes the copy. Any
+    failure -- no ffmpeg, an encoder this ffmpeg lacks -- hands back the
+    original: a larger upload beats no upload.
+    """
+    path = Path(path)
+    original = Prepared(path=path, temporary=False, converted=False, original=path)
+    if fmt not in UPLOAD_FORMATS:
+        return original
+    try:
+        if path.stat().st_size < minimum:
+            return original
+    except OSError:
+        return original
+    ffmpeg = ffmpeg_path()
+    if ffmpeg is None:
+        return original
+    suffix, codec = UPLOAD_FORMATS[fmt]
+    handle = tempfile.NamedTemporaryFile(prefix="aloud-upload-", suffix=suffix, delete=False)
+    handle.close()
+    target = Path(handle.name)
+    command = [ffmpeg, "-nostdin", "-y", "-i", str(path), "-vn", "-ac", "1", "-ar", "16000",
+               *codec, str(target)]
+    try:
+        completed = subprocess.run(command, capture_output=True, timeout=600, check=False)
+    except (OSError, subprocess.SubprocessError):
+        target.unlink(missing_ok=True)
+        return original
+    if completed.returncode != 0 or not target.exists() or target.stat().st_size == 0:
+        log.info("Could not compress %s to %s; uploading it as it is", path.name, fmt)
+        target.unlink(missing_ok=True)
+        return original
+    return Prepared(path=target, temporary=True, converted=True, original=path)

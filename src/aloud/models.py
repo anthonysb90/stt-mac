@@ -540,3 +540,33 @@ def row_view(model: Model, state: Status, job: Optional[Download],
         progress=None,
         tone=tone,
     )
+
+
+# ---------------------------------------------------------------------------
+# Advice per Mac
+# ---------------------------------------------------------------------------
+
+#: (architecture, model key) -> what it is best at on that Mac. The two Macs
+#: want different things: Apple Silicon runs Parakeet fast enough for
+#: everything; an Intel CPU needs a small model to dictate quickly and a
+#: large one only for files, where waiting is expected.
+ADVICE = {
+    ("arm64", "parakeet_mlx:mlx-community/parakeet-tdt-0.6b-v3"): "Best for dictation and files",
+    ("arm64", "parakeet_mlx:mlx-community/parakeet-tdt-0.6b-v2"): "English only; slightly more accurate",
+    ("arm64", "faster_whisper:large-v3-turbo"): "Best for files in other languages",
+    ("arm64", "whisper_cpp:ggml-large-v3-turbo-q5_0.bin"): "Best offline fallback",
+    ("x86_64", "faster_whisper:base.en"): "Best for dictation on this Mac",
+    ("x86_64", "faster_whisper:small.en"): "More accurate dictation, a little slower",
+    ("x86_64", "faster_whisper:large-v3-turbo"): "Best for files and other languages",
+    ("x86_64", "faster_whisper:tiny.en"): "For older or busy Intel Macs",
+    ("x86_64", "whisper_cpp:ggml-base.en.bin"): "Best offline fallback",
+}
+
+
+def this_mac() -> str:
+    return platform.machine() or ""
+
+
+def advice(model: Model, arch: Optional[str] = None) -> str:
+    """What ``model`` is best at on this Mac, or "" when nothing stands out."""
+    return ADVICE.get((arch or this_mac(), model.key), "")

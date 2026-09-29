@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .. import media
 from .. import segments as seg
 from ..media import mime_type
 from ..secrets import describe_source, read_key
@@ -60,7 +61,12 @@ class ElevenLabsEngine(TranscriptionEngine):
         if not ok:
             raise EngineError(detail)
 
-        body, content_type = multipart(self._fields(), "file", wav_path, mime_type(wav_path))
+        upload = media.compressed(wav_path, str(self.options.get("upload_format", "flac")))
+        try:
+            body, content_type = multipart(self._fields(), "file", upload.path,
+                                           mime_type(upload.path))
+        finally:
+            upload.cleanup()
         started = time.monotonic()
         payload = request_json(
             f"{self._base_url()}/speech-to-text",

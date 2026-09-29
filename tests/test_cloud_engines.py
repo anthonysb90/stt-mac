@@ -119,7 +119,7 @@ def test_long_audio_is_sent_in_chunks_and_stitched_back_together(server, monkeyp
         openai_reply("Second part.", [(1.0, 3.0, "Second part.")]),
     ])
     server.routes[("POST", "/v1/audio/transcriptions")] = lambda _r: (200, next(replies))
-    engine = build("openai", {"base_url": server.url + "/v1", "chunk_seconds": 10})
+    engine = build("openai", {"base_url": server.url + "/v1", "chunk_seconds": 10, "parallel_uploads": 1})
     progress = []
 
     transcript = engine.transcribe(
@@ -141,7 +141,7 @@ def test_long_audio_is_sent_in_chunks_and_stitched_back_together(server, monkeyp
 def test_cancelling_stops_before_the_next_chunk(server, monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     server.routes[("POST", "/v1/audio/transcriptions")] = (200, openai_reply("Part.", []))
-    engine = build("openai", {"base_url": server.url + "/v1", "chunk_seconds": 10})
+    engine = build("openai", {"base_url": server.url + "/v1", "chunk_seconds": 10, "parallel_uploads": 1})
     transcript = engine.transcribe(wav(tmp_path / "a.wav", 25), on_progress=lambda *_: False)
     assert len(server.requests) == 1
     assert transcript.text == "Part."
@@ -350,7 +350,7 @@ def test_a_chunk_that_keeps_failing_keeps_the_chunks_before_it(server, monkeypat
     monkeypatch.setenv("OPENAI_API_KEY", "k")
     replies = iter([(200, openai_reply("Kept.", [(0.0, 2.0, "Kept.")]))] + [(500, {})] * 5)
     server.routes[("POST", "/v1/audio/transcriptions")] = lambda _r: next(replies)
-    engine = build("openai", {"base_url": server.url + "/v1", "chunk_seconds": 10})
+    engine = build("openai", {"base_url": server.url + "/v1", "chunk_seconds": 10, "parallel_uploads": 1})
     transcript = engine.transcribe(wav(tmp_path / "a.wav", 25))
     assert transcript.text == "Kept."
     assert "0:00:10" in transcript.meta["warning"]
@@ -361,3 +361,56 @@ def test_a_first_chunk_failure_is_still_an_error(server, monkeypatch, tmp_path, 
     server.routes[("POST", "/v1/audio/transcriptions")] = (500, {})
     with pytest.raises(EngineError):
         build("openai", {"base_url": server.url + "/v1"}).transcribe(wav(tmp_path / "a.wav", 1))
+
+
+def test_long_files_upload_several_pieces_at_once_and_keep_their_order(server, monkeypatch, tmp_path):
+    import threading
+    import time
+
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    in_flight, peak, lock = [0], [0], threading.Lock()
+
+    def reply(request):
+        with lock:
+            in_flight[0] += 1
+            peak[0] = max(peak[0], in_flight[0])
+        time.sleep(0.2)  # long enough for the others to arrive meanwhile
+        with lock:
+            in_flight[0] -= 1
+        short = len(request.body) < 200_000  # the 5 s tail vs the 10 s pieces
+        return (200, openai_reply("Tail." if short else "Full.", [(0.0, 1.0, "x")]))
+
+    server.routes[("POST", "/v1/audio/transcriptions")] = reply
+    engine = build("groq", {"base_url": server.url + "/v1", "chunk_seconds": 10,
+                            "parallel_uploads": 3})
+    transcript = engine.transcribe(wav(tmp_path / "a.wav", 25), on_progress=lambda *_: True)
+    assert transcript.text == "Full. Full. Tail."
+    assert [s.start for s in transcript.segments] == [0.0, 10.0, 20.0]
+    assert peak[0] >= 2, "the pieces went up together"
+    assert all("prompt" not in form_fields(r.body) for r in server.requests)
+
+
+def test_large_uploads_are_compressed_when_ffmpeg_can(tmp_path, monkeypatch):
+    from aloud import media
+
+    script = tmp_path / "ffmpeg"
+    script.write_text('#!/bin/sh\nfor last; do :; done\nprintf fLaC > "$last"\n')
+    script.chmod(0o755)
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: str(script))
+    big = wav(tmp_path / "big.wav", 70)  # ~2.2 MB
+    small = wav(tmp_path / "small.wav", 3)
+
+    packed = media.compressed(big)
+    assert packed.path.suffix == ".flac" and packed.path.read_bytes() == b"fLaC"
+    packed.cleanup()
+    assert not packed.path.exists() and big.exists()
+    assert media.compressed(small).path == small, "a dictation is not worth compressing"
+    assert media.compressed(big, "wav").path == big
+
+
+def test_compression_failing_means_sending_the_original(tmp_path, monkeypatch):
+    from aloud import media
+
+    monkeypatch.setattr(media, "ffmpeg_path", lambda: None)
+    big = wav(tmp_path / "big.wav", 70)
+    assert media.compressed(big).path == big

@@ -121,8 +121,10 @@ class ModelsWindow:
     def _row(self, model: models.Model, available: bool) -> AppKit.NSView:
         key = model.key
         title_parts = [C.label(model.title, T.TYPE_TITLE_3)]
-        if model.recommended:
-            title_parts.append(C.pill("Recommended", T.BRAND_PRIMARY))
+        # Advice for *this* Mac: what suits Apple Silicon is wrong on Intel.
+        tip = models.advice(model) or ("Recommended" if model.recommended else "")
+        if tip:
+            title_parts.append(C.pill(tip, T.BRAND_PRIMARY))
         title_parts.append(C.spacer())
         title_line = C.stack(title_parts, vertical=False, spacing=T.SPACE["md"])
 
