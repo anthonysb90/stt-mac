@@ -101,6 +101,8 @@ class SettingsWindow:
                 C.separator(),
                 self._snippets_section(),
                 C.separator(),
+                self._sync_section(),
+                C.separator(),
                 self._sounds_section(),
                 C.separator(),
                 self._appearance_section(),
@@ -481,6 +483,41 @@ class SettingsWindow:
         self.controller.reset_file_engine()
         self._refresh_model_section()
         self._refresh_credentials()
+
+    # -- sync --------------------------------------------------------------
+
+    def _sync_section(self) -> AppKit.NSView:
+        from .. import sync
+
+        on = self.config.get("sync.dictionary", "local") == "icloud"
+        toggle = C.checkbox(
+            "Share the Dictionary across my Macs with iCloud Drive", on,
+            lambda sender: self._set_sync(sender), self._keeper,
+        )
+        available = sync.icloud_available()
+        toggle.setEnabled_(available or on)
+        note = C.label(
+            ("Every Mac signed in to the same Apple Account with this switched on "
+             "shares one Dictionary: a correction taught on one works on the others "
+             "by the next dictation. Turning it on merges this Mac's entries with any "
+             "already shared; nothing is replaced.")
+            if available else
+            "iCloud Drive is off on this Mac. Turn it on in System Settings → your "
+            "name → iCloud → iCloud Drive to share the Dictionary between Macs.",
+            T.TYPE_CAPTION, T.TEXT_TERTIARY, wraps=True,
+        )
+        return self._section("Sync", [toggle, note])
+
+    def _set_sync(self, sender) -> None:
+        on = sender.state() == AppKit.NSControlStateValueOn
+        try:
+            self.controller.set_dictionary_sync(on)
+        except OSError as exc:
+            sender.setState_(AppKit.NSControlStateValueOff if on else AppKit.NSControlStateValueOn)
+            alert = AppKit.NSAlert.alloc().init()
+            alert.setMessageText_("Could not change where the Dictionary is kept")
+            alert.setInformativeText_(str(exc))
+            alert.runModal()
 
     # -- snippets ----------------------------------------------------------
 

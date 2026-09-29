@@ -239,6 +239,11 @@ DEFAULTS: Dict[str, Any] = {
         },
     },
     "history": {"enabled": True, "max_entries": 500},
+    "sync": {
+        # "icloud" keeps the Dictionary in iCloud Drive/Aloud so every Mac on
+        # the account shares it; "local" keeps it on this Mac. Settings → Sync.
+        "dictionary": "local",
+    },
     # Say "insert <trigger>" (or just the trigger) to type the text instead.
     # e.g. {"my signature": "Pastor Anthony\nMission USA"}. Settings → Snippets.
     "snippets": {},

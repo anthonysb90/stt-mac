@@ -186,7 +186,11 @@ class DictationController:
         #: Built on the first file that needs it; see files_engine().
         self._file_engine: Optional[TranscriptionEngine] = None
         self._file_engine_lock = threading.Lock()
-        self.dictionary = dictionary if dictionary is not None else Dictionary.load()
+        if dictionary is None:
+            from . import sync
+
+            dictionary = sync.load(config)
+        self.dictionary = dictionary
         self._ruleset = corrections.ruleset_for(self.dictionary)
 
         self.listener: Optional[hotkey_mod.HotkeyListener] = None
@@ -842,6 +846,11 @@ class DictationController:
         try:
             with self._dictionary_lock:
                 changed = self.dictionary.reload_if_changed()
+                if self.config.get("sync.dictionary", "local") == "icloud":
+                    # Another Mac saved at the same moment: fold its copy in.
+                    from . import sync
+
+                    changed = bool(sync.fold_in_conflicts(self.dictionary)) or changed
             if changed:
                 self.reload_rules()
                 log.info("Reloaded the dictionary (%d entries)", len(self.dictionary))
@@ -859,6 +868,24 @@ class DictationController:
         with self._dictionary_lock:
             self._ruleset = corrections.ruleset_for(self.dictionary)
         self._emit("on_dictionary_changed")
+
+    def set_dictionary_sync(self, icloud: bool) -> None:
+        """Move the Dictionary into iCloud Drive, or back to this Mac.
+
+        Raises OSError with a readable reason when it cannot.
+        """
+        from . import dictionary as dictionary_module
+        from . import sync
+
+        if icloud and not sync.icloud_available():
+            raise OSError("iCloud Drive is not turned on for this Mac. Turn it on in "
+                          "System Settings → your name → iCloud → iCloud Drive.")
+        target = sync.icloud_path() if icloud else dictionary_module.DICTIONARY_FILE
+        with self._dictionary_lock:
+            sync.move_to(self.dictionary, target)
+        self.config.set("sync.dictionary", "icloud" if icloud else "local")
+        self.config.save()
+        self.reload_rules()
 
     def save_dictionary(self) -> None:
         self.dictionary.save()
