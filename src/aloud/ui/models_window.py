@@ -205,8 +205,11 @@ class ModelsWindow:
     def _start_polling(self) -> None:
         if self._timer is not None:
             return
-        target = C.action(lambda _sender: self.refresh())
-        self._keeper.append(target)
+        target = getattr(self, "_poll_target", None)
+        if target is None:  # one target, reused each time polling starts
+            target = C.action(lambda _sender: self.refresh())
+            self._keeper.append(target)
+            self._poll_target = target
         self._timer = AppKit.NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
             POLL_SECONDS, target, b"invoke:", None, True
         )

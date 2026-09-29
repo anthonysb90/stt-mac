@@ -644,8 +644,11 @@ def text_view(text: str, style: T.TextStyle = T.TYPE_TRANSCRIPT) -> AppKit.NSTex
 
     The find bar is on: ⌘F searches the transcript, ⌘G steps through matches.
     """
+    # Zero width to start. With NSViewWidthSizable, autoresizing *adds* the
+    # clip view's growth to the view's width, so starting at any width left
+    # the text that much wider than the visible area, off the right edge.
     view = AppKit.NSTextView.alloc().initWithFrame_(
-        ((0, 0), (T.METRIC["window_width_min"], T.METRIC["window_height_min"]))
+        ((0, 0), (0, T.METRIC["window_height_min"]))
     )
     view.setMinSize_((0.0, 0.0))
     view.setMaxSize_((_UNBOUNDED, _UNBOUNDED))

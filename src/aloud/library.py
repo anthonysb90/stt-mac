@@ -381,3 +381,32 @@ class Index:
         records = [record for _stamp, record in seen.values()]
         records.sort(key=lambda r: r.created_at, reverse=True)
         return records
+
+
+def utf16_length(text: str) -> int:
+    """Length as AppKit counts it: UTF-16 code units, not Python characters."""
+    return len(text.encode("utf-16-le")) // 2
+
+
+def find_all_utf16(text: str, query: str) -> List[Tuple[int, int]]:
+    """Case-insensitive matches as AppKit ranges (UTF-16 offsets).
+
+    :func:`find_all` counts Python characters in a lower-cased copy. AppKit
+    counts UTF-16 units, so every emoji -- two units, one character -- shifted
+    each later highlight one place, and lower-casing can itself change a
+    string's length ("İ"). Matching the original text, and converting offsets
+    as we go, keeps the ranges exact.
+    """
+    query = query.strip()
+    if not query:
+        return []
+    found: List[Tuple[int, int]] = []
+    cursor_chars = cursor_units = 0
+    for match in re.finditer(re.escape(query), text, re.IGNORECASE):
+        start, end = match.span()
+        cursor_units += utf16_length(text[cursor_chars:start])
+        length = utf16_length(text[start:end])
+        found.append((cursor_units, length))
+        cursor_units += length
+        cursor_chars = end
+    return found

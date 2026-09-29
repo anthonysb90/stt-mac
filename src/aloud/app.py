@@ -195,6 +195,7 @@ class AloudDelegate(Foundation.NSObject):
         if job is None:
             # Refused (recording, or no such file); the reason is in an alert.
             window.window.close()
+            self._transcript_windows.remove(window)
             return
         holder["job"] = job
         self._import_windows[job.id] = window
@@ -202,15 +203,25 @@ class AloudDelegate(Foundation.NSObject):
     @objc.python_method
     def _new_transcript_window(self, title, on_cancel=None):
         """Make a transcript window, and let go of the ones already closed."""
-        self._transcript_windows = [
-            w for w in self._transcript_windows
-            if w.window.isVisible() or not w.finished
-        ]
+        self._prune_windows()
         window = transcript_window.TranscriptWindow(
             title, on_cancel=on_cancel, on_changed=self._library_changed
         )
         self._transcript_windows.append(window)
         return window
+
+    @objc.python_method
+    def _prune_windows(self) -> None:
+        """Let go of transcript windows that are finished and closed.
+
+        Minimised windows are kept: they are off screen but not closed, and
+        dropping one freed its button targets, so clicking a button after
+        restoring it could crash.
+        """
+        self._transcript_windows = [
+            w for w in self._transcript_windows
+            if not w.finished or w.window.isVisible() or w.window.isMiniaturized()
+        ]
 
     @objc.python_method
     def _open_record(self, record) -> None:
@@ -219,9 +230,7 @@ class AloudDelegate(Foundation.NSObject):
             if existing.record is not None and existing.record.id == record.id:
                 existing.window.makeKeyAndOrderFront_(None)
                 return
-        self._transcript_windows = [
-            w for w in self._transcript_windows if w.window.isVisible() or not w.finished
-        ]
+        self._prune_windows()
         window = transcript_window.TranscriptWindow.for_record(
             record, on_changed=self._library_changed
         )
@@ -233,42 +242,48 @@ class AloudDelegate(Foundation.NSObject):
         if self.main_window is not None:
             self.main_window.on_library_changed()
 
+    # Every handler below looks its window up *on the main thread*, inside
+    # the deferred block. The worker can start -- and fail -- a job before
+    # _begin_import has registered its window (the job is queued first), and
+    # a lookup made on the worker thread then found nothing: a stray alert,
+    # and a window left on "Reading the file…" for good. _begin_import runs
+    # on the main thread too, so by the time a block runs, the window is there.
+
     @objc.python_method
-    def _window_for(self, job):
+    def _with_window(self, job, action, pop: bool = False) -> None:
         if getattr(job, "source", "") != "file":
-            return None
-        return self._import_windows.get(job.id)
+            return
+        job_id = job.id
+
+        def run() -> None:
+            windows = self._import_windows
+            window = windows.pop(job_id, None) if pop else windows.get(job_id)
+            if window is not None:
+                action(window)
+
+        run_on_main(run)
 
     @objc.python_method
     def on_job_preparing(self, job) -> None:
-        window = self._window_for(job)
-        if window is not None:
-            run_on_main(lambda: window.begin("Converting with ffmpeg…"))
+        self._with_window(job, lambda w: w.begin("Converting with ffmpeg…"))
 
     @objc.python_method
     def on_job_started(self, job) -> None:
-        window = self._window_for(job)
-        if window is None:
-            return
         engine = self.controller.engine_for(job)
         streaming = getattr(engine, "supports_progress", False)
         detail = f"Transcribing with {engine.label}…" if streaming else (
             f"Transcribing with {engine.label} — "
             f"this engine reports no progress until it finishes."
         )
-        run_on_main(lambda: window.begin(detail))
+        self._with_window(job, lambda w: w.begin(detail))
 
     @objc.python_method
     def on_progress(self, job, text, done, total) -> None:
-        window = self._window_for(job)
-        if window is not None:
-            run_on_main(lambda: window.update(text, done, total))
+        self._with_window(job, lambda w: w.update(text, done, total))
 
     @objc.python_method
     def on_cancelled(self, job) -> None:
-        window = self._import_windows.pop(getattr(job, "id", None), None)
-        if window is not None:
-            run_on_main(window.cancelled)
+        self._with_window(job, lambda w: w.cancelled(), pop=True)
 
     @objc.python_method
     def on_result(self, dictation) -> None:
@@ -288,18 +303,22 @@ class AloudDelegate(Foundation.NSObject):
 
     @objc.python_method
     def on_empty(self, job) -> None:
-        window = self._import_windows.pop(getattr(job, "id", None), None)
-        if window is not None:
-            run_on_main(lambda: window.fail(f"No speech was recognised in {job.label}."))
+        self._with_window(
+            job, lambda w: w.fail(f"No speech was recognised in {job.label}."), pop=True)
 
     @objc.python_method
     def on_job_failed(self, job, title: str, message: str) -> None:
         """A file failed: say so in its own window, not in an alert."""
-        window = self._import_windows.pop(getattr(job, "id", None), None)
-        if window is not None:
-            run_on_main(lambda: window.fail(f"{title}: {message}"))
-        else:
-            run_on_main(lambda: self._alert(title, message))
+        job_id = job.id
+
+        def run() -> None:
+            window = self._import_windows.pop(job_id, None)
+            if window is not None:
+                window.fail(f"{title}: {message}")
+            else:
+                self._alert(title, message)
+
+        run_on_main(run)
 
     @objc.python_method
     def on_error(self, title: str, message: str) -> None:

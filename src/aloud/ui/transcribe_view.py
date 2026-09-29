@@ -96,13 +96,26 @@ class TranscribeView:
         """
         path = Path(path)
         self._token = token = object()
+        # Forget the previous file now: a reload() during the probe would
+        # otherwise re-select it and throw this one away.
+        self.selection = None
+        C.clear(self.details)
         self.zone_headline.setStringValue_(path.name)
         self.zone_detail.setStringValue_("Reading the file…")
         self.transcribe_button.setEnabled_(False)
         self.clear_button.setHidden_(False)
 
         def probe() -> None:
-            info = media.inspect(path)
+            try:
+                info = media.inspect(path)
+            except Exception:  # e.g. ffprobe answering "N/A" for a rate
+                info = media.FileInfo(path=path, container=path.suffix.lower().lstrip("."),
+                                      supported=media.is_supported(path))
+                try:
+                    info.size_bytes = path.stat().st_size
+                    info.modified = path.stat().st_mtime
+                except OSError:
+                    pass
             run_on_main(lambda: self._show_info(info, token))
 
         threading.Thread(target=probe, name="aloud-probe", daemon=True).start()

@@ -212,7 +212,11 @@ class TranscriptWindow:
             bits.append(summarise(dictation.corrections))
         self._show_record(record, summary=" · ".join(bits),
                           warning=getattr(dictation, "warning", ""))
-        self.copy()
+        if self.window.isVisible() or self.window.isMiniaturized():
+            # Not for a window already closed: that would replace the
+            # clipboard with a transcript the person has walked away from.
+            # It is in the Transcripts library either way.
+            self.copy()
 
     def _show_record(self, record: library.Record, summary: str, warning: str = "") -> None:
         self.record = record
@@ -286,10 +290,10 @@ class TranscriptWindow:
     def _search(self, query: str) -> None:
         text = str(self.body.string())
         manager = self.body.layoutManager()
-        everything = (0, len(text))
+        everything = (0, self.body.textStorage().length())
         manager.removeTemporaryAttribute_forCharacterRange_(
             AppKit.NSBackgroundColorAttributeName, everything)
-        self._matches = library.find_all(text, query.strip())
+        self._matches = library.find_all_utf16(text, query)
         self._match_index = -1
         if not query.strip():
             self.match_label.setStringValue_("")
@@ -322,14 +326,18 @@ class TranscriptWindow:
         if not title or title == self.record.title:
             sender.setStringValue_(self.record.title)
             return
+        old = self.record.title
         try:
             if self.record.folder is not None:
                 library.rename(self.record, title)
             else:
                 self.record.title = title
         except OSError as exc:
+            # rename() sets the title before moving the folder; put it back
+            # so the record and the folder on disk agree.
+            self.record.title = old
             _alert("Could not rename the transcript", str(exc))
-            sender.setStringValue_(self.record.title)
+            sender.setStringValue_(old)
             return
         self.title = self.record.title
         self.window.setTitle_(f"{self.title} — {APP_NAME}")
@@ -433,10 +441,17 @@ class TranscriptWindow:
         panel.setExtensionHidden_(False)
         panel.setCanCreateDirectories_(True)
 
+        # A fresh keeper per export: these targets live only as long as the
+        # panel, and adding them to the window's keeper grew it every export.
+        keeper: list = []
+        self._export_keeper = keeper
         note = C.label("", T.TYPE_CAPTION, T.STATUS_WARNING, wraps=True)
+        note.setPreferredMaxLayoutWidth_(T.METRIC["export_note_width"])
+        note.widthAnchor().constraintEqualToConstant_(T.METRIC["export_note_width"]).setActive_(True)
+        holder = {}
         layout_popup = C.popup([l.label for l in layouts], chosen["layout"].label,
                                lambda s: chosen.update(layout=layouts[s.indexOfSelectedItem()]),
-                               self._keeper)
+                               keeper)
 
         def refresh_note() -> None:
             fmt = chosen["format"]
@@ -450,6 +465,11 @@ class TranscriptWindow:
                 note.setStringValue_(f"{fmt.label} has one fixed layout.")
             else:
                 note.setStringValue_("")
+            accessory = holder.get("accessory")
+            if accessory is not None:
+                # Sized once when the note was empty, a three-line warning
+                # was cut to one line. Re-fit whenever the note changes.
+                accessory.setFrameSize_(accessory.fittingSize())
 
         def pick_format(sender) -> None:
             fmt = formats[sender.indexOfSelectedItem()]
@@ -460,16 +480,17 @@ class TranscriptWindow:
             refresh_note()
 
         format_popup = C.popup([f.label for f in formats], formats[0].label, pick_format,
-                               self._keeper)
+                               keeper)
         grid = C.stack([
             C.stack([C.label("Format", T.TYPE_BODY, T.TEXT_SECONDARY), format_popup,
                      C.label("Layout", T.TYPE_BODY, T.TEXT_SECONDARY), layout_popup],
                     vertical=False, spacing=T.SPACE["md"]),
             note,
         ], spacing=T.SPACE["sm"])
-        note.widthAnchor().constraintEqualToAnchor_(grid.widthAnchor()).setActive_(True)
+        accessory = C.fit_to_content(C.pad(grid, T.INSET["control"]))
+        holder["accessory"] = accessory
         refresh_note()
-        panel.setAccessoryView_(C.fit_to_content(C.pad(grid, T.INSET["control"])))
+        panel.setAccessoryView_(accessory)
 
         if panel.runModal() != AppKit.NSModalResponseOK:
             return

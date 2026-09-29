@@ -34,6 +34,7 @@ class LibraryView:
         self._index = library.Index()
         self._records: List[library.Record] = []
         self._query = ""
+        self._row_keeper: list = []
 
         self.search = C.search_field("Search all transcripts", self._search_changed, self._keeper)
         self.count_label = C.label("", T.TYPE_CAPTION, T.TEXT_TERTIARY)
@@ -65,6 +66,9 @@ class LibraryView:
 
     def render(self) -> None:
         C.clear(self.list_stack)
+        # Row buttons' targets live as long as the rows do. Replaced, not
+        # appended to: the list re-renders on every keystroke in the search.
+        self._row_keeper = []
         hits = library.search(self._query, self._records)
         total = len(self._records)
         if self._query:
@@ -103,11 +107,12 @@ class LibraryView:
         if self._query and hit.count:
             meta_bits.append(f"{hit.count} match{'' if hit.count == 1 else 'es'}")
 
-        open_button = C.button("Open", lambda _s, r=record: self._on_open(r), self._keeper)
+        keeper = self._row_keeper
+        open_button = C.button("Open", lambda _s, r=record: self._on_open(r), keeper)
         reveal = C.icon_button("folder", "Show in Finder",
-                               lambda _s, r=record: _reveal(r), self._keeper)
+                               lambda _s, r=record: _reveal(r), keeper)
         trash = C.icon_button("trash", "Move to Trash",
-                              lambda _s, r=record: self._trash(r), self._keeper)
+                              lambda _s, r=record: self._trash(r), keeper)
         header = C.stack([C.label(record.title, T.TYPE_TITLE_3), C.spacer(), reveal, trash,
                           open_button], vertical=False, spacing=T.SPACE["md"])
         meta = C.label(" · ".join(meta_bits), T.TYPE_CAPTION, T.TEXT_TERTIARY)

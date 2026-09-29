@@ -209,3 +209,15 @@ def test_a_library_that_cannot_be_written_does_not_lose_the_result(app, tmp_path
     monkeypatch.setattr(library, "save", full_disk)
     dictation = run_file(app, _silent_wav(tmp_path / "a.wav"))
     assert dictation.text and dictation.record is None
+
+
+def test_search_ranges_count_the_way_appkit_does():
+    """An emoji is one Python character but two UTF-16 units."""
+    text = "🙏 Amen. Pray. amen"
+    ranges = library.find_all_utf16(text, "amen")
+    encoded = text.encode("utf-16-le")
+    words = [encoded[s * 2:(s + n) * 2].decode("utf-16-le") for s, n in ranges]
+    assert words == ["Amen", "amen"]
+    assert library.utf16_length(text) == len(text) + 1
+    assert library.find_all_utf16(text, "  ") == []
+    assert library.find_all_utf16("a.b a+b", "a+b") == [(4, 3)]  # not a regex
