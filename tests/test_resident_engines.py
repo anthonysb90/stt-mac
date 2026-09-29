@@ -693,3 +693,20 @@ def test_transcribe_is_routed_through_the_mlx_thread():
     )
     body = ast.unparse(node)
     assert "self._mlx(" in body, "transcribe must hand off to the MLX thread"
+
+
+def test_parakeet_gives_up_its_thread_between_file_chunks(tmp_path, monkeypatch, fake_mlx):
+    """One MLX call per chunk, so a dictation can take a turn in between.
+
+    As a single call, a file held the model's only thread from start to end,
+    and a dictation made meanwhile waited for the whole file.
+    """
+    wav = _write_wav(tmp_path / "long.wav", seconds=30.0) or tmp_path / "long.wav"
+    stream = _StreamingParakeetStream()
+    engine = _ready_engine(monkeypatch, _StreamingParakeet(stream), stream_chunk_seconds=10.0)
+    turns = []
+    real = engine._mlx
+    monkeypatch.setattr(engine, "_mlx", lambda fn, *a, **k: turns.append(fn) or real(fn, *a, **k))
+    engine.transcribe(wav, on_progress=lambda *_: True)
+    feeds = [fn for fn in turns if getattr(fn, "__name__", "") == "feed"]
+    assert len(feeds) == 3, "one turn per 10 s chunk"

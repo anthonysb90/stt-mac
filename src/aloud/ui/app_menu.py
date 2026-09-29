@@ -93,6 +93,8 @@ def build(handlers: Dict[str, Callable], target) -> AppKit.NSMenu:
                              target=target))
     dictation.addItem_(_item("Cancel Recording", b"cancelDictation:", "\x1b", target=target))
     dictation.addItem_(AppKit.NSMenuItem.separatorItem())
+    dictation.addItem_(_item("Quick Dictate…", b"showQuickDictate:", "k", target=target))
+    dictation.addItem_(AppKit.NSMenuItem.separatorItem())
     dictation.addItem_(_item("Copy Last Dictation", b"copyLast:", "c",
                              AppKit.NSEventModifierFlagCommand | AppKit.NSEventModifierFlagShift,
                              target=target))

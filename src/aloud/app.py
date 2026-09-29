@@ -36,6 +36,7 @@ from .ui import main_window as main_window_module
 from .ui.main_window import MainWindow
 from .ui.menu_bar import MenuBarItem
 from .ui.models_window import ModelsWindow
+from .ui.quick_dictate_window import QuickDictateWindow
 from .ui.settings_window import SettingsWindow
 
 log = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class AloudDelegate(Foundation.NSObject):
         self.main_window = None
         self.settings = None
         self.models_window = None
+        self.quick = None
         self.menu_bar = None
         self._transcript_windows = []
         #: job id -> the window watching that file
@@ -86,7 +88,9 @@ class AloudDelegate(Foundation.NSObject):
             on_settings=self.showSettings_,
             on_transcribe=self._begin_import,
             on_open_record=self._open_record,
+            on_quick=lambda: self.quick.show(start=True),
         )
+        self.quick = QuickDictateWindow(self.controller, on_saved=self._library_changed)
         self.models_window = ModelsWindow(self.controller, on_changed=self._models_changed)
         self.settings = SettingsWindow(
             self.controller,
@@ -98,6 +102,7 @@ class AloudDelegate(Foundation.NSObject):
             {
                 "toggle": self.controller.toggle,
                 "open_main": lambda: self.main_window.show(),
+                "quick": lambda: self.quick.show(start=True),
                 "open_settings": lambda: self.settings.show(),
                 "quit": lambda: AppKit.NSApplication.sharedApplication().terminate_(None),
             },
@@ -169,6 +174,11 @@ class AloudDelegate(Foundation.NSObject):
             log.info("Hotkey reinstalled after Accessibility was granted")
 
         run_on_main(reinstall)
+
+    @objc.python_method
+    def on_quick_dictate_requested(self) -> None:
+        """The hotkey was tapped twice: open Quick Dictate, listening."""
+        run_on_main(lambda: self.quick.show(start=True))
 
     @objc.python_method
     def on_state(self, state: State) -> None:
@@ -360,6 +370,9 @@ class AloudDelegate(Foundation.NSObject):
     def showSettings_(self, _sender):
         self.settings.show()
 
+    def showQuickDictate_(self, _sender):
+        self.quick.show(start=True)
+
     def showModels_(self, _sender):
         self.models_window.show()
 
@@ -515,7 +528,7 @@ class AloudDelegate(Foundation.NSObject):
         if selector == b"transcribeFile:":
             # Files queue now, each in its own window; only a live recording
             # refuses one.
-            return self.controller.state is not State.RECORDING
+            return True
         return True
 
     # -- helpers -----------------------------------------------------------

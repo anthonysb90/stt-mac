@@ -229,6 +229,16 @@ DEFAULTS: Dict[str, Any] = {
         },
     },
     "history": {"enabled": True, "max_entries": 500},
+    "quick_dictate": {
+        # Tap the hotkey twice quickly (hold mode) to open Quick Dictate from
+        # any app.
+        "double_tap": True,
+        # Grey preview of the phrase in progress. "auto" turns it off for
+        # cloud engines, where every preview is an upload.
+        "previews": "auto",
+        # Quiet this long ends a phrase and commits its text.
+        "pause_seconds": 0.7,
+    },
     # Every transcribed file is kept in Transcripts/ under the support folder,
     # with its timings and speaker names, so it can be reopened, searched and
     # exported again. Dictations are not: they live in the history.

@@ -364,7 +364,7 @@ def test_an_imported_file_is_never_typed_into_the_focused_app(app, tmp_path, mon
     monkeypatch.setattr("aloud.media.prepare", lambda p, **_k: _prepared(source))
 
     app.transcribe_file(source)
-    job = app._jobs.get()
+    job = app._file_jobs.get()
     assert job.deliver is False
     assert job.source == "file"
     assert job.label == "meeting.wav"
@@ -382,7 +382,7 @@ def test_an_imported_file_still_reaches_the_history_and_observers(app, tmp_path,
     app.add_observer(watcher)
 
     app.transcribe_file(source)
-    app._transcribe_and_deliver(app._jobs.get())
+    app._transcribe_and_deliver(app._file_jobs.get())
 
     assert len(watcher.results) == 1
     assert watcher.results[0].source == "file"
@@ -402,7 +402,7 @@ def test_a_converted_file_is_cleaned_up_afterwards(app, tmp_path, monkeypatch):
     monkeypatch.setattr("aloud.media.prepare", lambda p, **_k: prepared)
 
     app.transcribe_file(original)
-    job = app._jobs.get()
+    job = app._file_jobs.get()
     app._drain_one_for_test(job)
     assert removed == [converted]
 
@@ -427,8 +427,8 @@ def test_an_unreadable_file_reports_instead_of_crashing(app, tmp_path, monkeypat
     broken = tmp_path / "broken.mp3"
     broken.write_bytes(b"not audio")
     app.transcribe_file(broken)
-    assert app._jobs.qsize() == 1, "queued; the conversion has not run yet"
-    job = app._jobs.get()
+    assert app._file_jobs.qsize() == 1, "queued; the conversion has not run yet"
+    job = app._file_jobs.get()
     app._drain_one_for_test(job)
     # Reported to that file's window, not as an app-wide alert.
     assert not watcher.errors
@@ -441,7 +441,7 @@ def test_a_missing_file_is_refused_before_queueing(app, tmp_path):
     watcher = Recorder()
     app.add_observer(watcher)
     app.transcribe_file(tmp_path / "nowhere.mp3")
-    assert app._jobs.qsize() == 0
+    assert app._file_jobs.qsize() == 0
     assert watcher.errors and "No such file" in watcher.errors[0][1]
 
 
@@ -475,22 +475,17 @@ def test_error_recovery_still_clears_a_stale_error(app):
     assert app.state is State.IDLE
 
 
-def test_importing_a_file_while_recording_is_refused_without_breaking_it(app, tmp_path):
-    """The refusal must not change state: ERROR would orphan the recorder too."""
+def test_a_file_can_be_queued_while_recording_without_disturbing_it(app, tmp_path):
+    """Files have their own queue now, so there is nothing to refuse."""
     audio = _silent_wav(tmp_path / "clip.wav")
-    watcher = Recorder()
-    app.add_observer(watcher)
-
     app.begin_recording()
-    app.transcribe_file(audio)
+    job = app.transcribe_file(audio)
 
-    assert app.state is State.RECORDING, "the dictation in progress survives"
-    assert app._jobs.qsize() == 0, "the file was not queued"
-    assert watcher.errors and "recording" in watcher.errors[0][1]
-
+    assert job is not None and app._file_jobs.qsize() == 1
+    assert app.state is State.RECORDING, "the dictation in progress is untouched"
     app.finish_recording()
     assert not app.recorder.recording
-    assert app._jobs.qsize() == 1, "the dictation still went through"
+    assert app._jobs.qsize() == 1, "the dictation went to its own queue"
 
 
 def test_file_conversion_runs_on_the_worker_not_the_caller(app, tmp_path, monkeypatch):
@@ -509,7 +504,7 @@ def test_file_conversion_runs_on_the_worker_not_the_caller(app, tmp_path, monkey
 
     app.transcribe_file(source)
     assert calls == [], "queueing must not convert"
-    app._drain_one_for_test(app._jobs.get())
+    app._drain_one_for_test(app._file_jobs.get())
     assert calls == [source], "the worker converts"
 
 
@@ -649,14 +644,38 @@ def test_a_failing_job_never_overrides_a_live_recording(app, tmp_path, monkeypat
     assert not app.recorder.recording
 
 
-def test_the_state_stays_transcribing_while_work_is_queued(app, tmp_path):
+def test_files_never_change_the_dictation_state(app, tmp_path):
+    """The hotkey must stay live however long a file takes."""
     a = app.transcribe_file(_silent_wav(tmp_path / "a.wav"))
     b = app.transcribe_file(_silent_wav(tmp_path / "b.wav"))
+    assert app.state is State.IDLE and app.files_pending() == 2
+    app._run_job(app._file_jobs.get_nowait())
+    assert app.state is State.IDLE and app.files_pending() == 1
+    app._run_job(app._file_jobs.get_nowait())
+    assert app.files_pending() == 0 and a.id != b.id
+
+
+def test_dictation_runs_while_a_file_is_still_queued(app, tmp_path):
+    seen = []
+    app.add_observer(type("L", (), {"on_result": lambda _s, d: seen.append(d.source)})())
+    app.transcribe_file(_silent_wav(tmp_path / "long_sermon.wav"))
+    app.begin_recording()
+    app.finish_recording()
+    app._run_job(app._jobs.get_nowait())  # the dictation worker does not wait
+    assert seen == ["microphone"] and app._file_jobs.qsize() == 1
+    assert app.state is State.IDLE
+
+
+def test_the_dictation_state_waits_for_queued_dictation(app, tmp_path):
+    app.begin_recording()
+    app.finish_recording()
+    app.recorder.wav_path = _silent_wav(tmp_path / "two.wav")
+    app.begin_recording()
+    app.finish_recording()
     app._run_job(app._jobs.get_nowait())
-    assert app.state is State.TRANSCRIBING, "b is still waiting"
+    assert app.state is State.TRANSCRIBING, "the second dictation is still queued"
     app._run_job(app._jobs.get_nowait())
     assert app.state is State.IDLE
-    assert a.id != b.id
 
 
 def test_cancelling_a_queued_file_skips_it(app, tmp_path):
@@ -665,8 +684,8 @@ def test_cancelling_a_queued_file_skips_it(app, tmp_path):
     first = app.transcribe_file(_silent_wav(tmp_path / "a.wav"))
     second = app.transcribe_file(_silent_wav(tmp_path / "b.wav"))
     app.cancel_import(second)  # pressed while it waits behind the first
-    app._run_job(app._jobs.get_nowait())
-    app._run_job(app._jobs.get_nowait())
+    app._run_job(app._file_jobs.get_nowait())
+    app._run_job(app._file_jobs.get_nowait())
     assert cancelled == [second]
     assert not first.cancel.is_set()
 

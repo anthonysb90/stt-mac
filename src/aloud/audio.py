@@ -121,6 +121,37 @@ class Recorder:
             with self._lock:
                 self._chunks = []
 
+    # -- reading while recording (Quick Dictate) ---------------------------
+
+    def read_new(self, cursor: int) -> "tuple[bytes, int]":
+        """Audio captured since ``cursor`` (a count of blocks), without stopping.
+
+        Returns the new audio and the cursor to pass next time. Only new
+        blocks are joined, so reading every fraction of a second stays cheap
+        however long the recording runs.
+        """
+        with self._lock:
+            fresh = self._chunks[cursor:]
+            cursor = len(self._chunks)
+        return b"".join(fresh), cursor
+
+    def halt(self) -> None:
+        """Stop the microphone but keep what was captured, for a last read."""
+        stream, self._stream = self._stream, None
+        self._level = 0.0
+        if stream is None:
+            return
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:
+            log.exception("Error while closing the audio stream")
+
+    def discard(self) -> None:
+        """Forget the captured audio."""
+        with self._lock:
+            self._chunks = []
+
     # -- internals ---------------------------------------------------------
 
     def _callback(self, indata, frames, time_info, status) -> None:

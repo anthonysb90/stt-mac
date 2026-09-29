@@ -7,6 +7,7 @@ ready to feed a future "learn my vocabulary" pass.
 from __future__ import annotations
 
 import json
+import threading
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,10 @@ from typing import Any, Dict, List, Optional
 from .paths import HISTORY_FILE, ensure_dirs
 
 log = logging.getLogger(__name__)
+
+#: Dictations and files finish on different threads now; two appends and a
+#: trim running at once could interleave lines or drop one.
+_lock = threading.Lock()
 
 
 def record(
@@ -42,13 +47,14 @@ def record(
         entry["corrections"] = corrections
         if raw and raw != text:
             entry["raw"] = raw
-    try:
-        with HISTORY_FILE.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except OSError:
-        log.exception("Could not append to the history file")
-        return
-    _trim(max_entries)
+    with _lock:
+        try:
+            with HISTORY_FILE.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            log.exception("Could not append to the history file")
+            return
+        _trim(max_entries)
 
 
 def _trim(max_entries: int) -> None:

@@ -126,6 +126,25 @@ German and other Western European languages; for Korean, Chinese, Russian or
 Arabic, export Word or HTML — the export window warns you when this applies.
 The Dictionary's corrections apply to every layout, subtitles included.
 
+**Quick Dictate** (`⌘K`, the menu bar, the speech-bubble button in the main
+window, or **tap the hotkey twice** from any app) — a small floating window that
+writes down what you say *as you say it*. Finished phrases appear in full
+colour, the phrase you are still saying in grey. Stopping (Esc, Stop, or the
+hotkey) is near-instant however long you talked, because each phrase was
+transcribed at the pause after it; only the last one is left. Then the text is
+yours to edit: **⌘↩** pastes it into the app you were in, **Copy** takes it
+all, **Save** keeps it in Transcripts, and **Continue** adds more to the end.
+Use it for the thought on the way to a meeting, a prayer request in the
+hallway, or a draft before you know where it is going. The grey preview is off
+for cloud engines, where every preview would be an upload; set
+`quick_dictate.double_tap` to `false` if two quick taps ever open it by accident.
+
+**Dictation never waits for a file.** Files have their own queue: transcribe a
+two-hour recording and keep dictating with the hotkey while it runs. The menu
+bar's *Transcribing* means your dictation is on its way; a file's progress is
+in its own window. (With Parakeet both share one model, so a dictation may wait
+a moment for the file's current ten-second piece.)
+
 **Transcripts** (`⌘3`) — every file you transcribe is kept. Search across all
 of them at once (titles, full text and speaker names), open any one back into
 its window, show it in Finder, or move it to the Trash. They live in
@@ -336,7 +355,7 @@ rules, the latency budget, and who owns cleanup.
   ElevenLabs calls, and model downloads from Hugging Face. All are tested
   against a local server that plays the service (request shape, chunking,
   polling, timings, errors, cancelled downloads), not against the services.
-* **Never run on a Mac yet** — the Models window, the Transcripts pane, the
+* **Never run on a Mac yet** — Quick Dictate, the Models window, the Transcripts pane, the
   rebuilt transcript window (views, search, speaker names, export), and the
   file-engine setting. Their logic is tested; their layout has not been seen.
   Word and PDF output is checked against real readers (python-docx, pypdf,
@@ -418,6 +437,7 @@ src/aloud/
   export.py       layouts × formats: txt · docx · pdf · md · html · json · csv · srt · vtt
   documents.py    Word and PDF, written directly (no extra dependency)
   library.py      the saved transcripts, and searching them
+  live.py         transcribing while you speak: pauses, commits, previews
   models.py       the local model catalog and its downloader
   dictionary.py   entries, and the hand-editable JSON behind them
   corrections.py  the correction pass and its risk analysis
@@ -429,6 +449,7 @@ src/aloud/
     components.py token-driven building blocks
     main_window.py · history_view.py · dictionary_view.py
     settings_window.py · models_window.py · transcript_window.py · library_view.py
+    quick_dictate_window.py
     menu_bar.py · app_menu.py · meter.py
     formatting.py presentation logic with no AppKit in it
 scripts/          bootstrap · model download · icon · app build

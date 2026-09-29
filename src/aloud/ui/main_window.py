@@ -58,7 +58,8 @@ class _WindowDelegate(Foundation.NSObject):
 
 class MainWindow:
     def __init__(self, controller, on_settings: Callable,
-                 on_transcribe: Callable, on_open_record: Callable = None) -> None:
+                 on_transcribe: Callable, on_open_record: Callable = None,
+                 on_quick: Callable = None) -> None:
         self.controller = controller
         self._on_settings = on_settings
         self._on_transcribe = on_transcribe
@@ -84,6 +85,9 @@ class MainWindow:
         self._build_device_menu(self.device_popup.menu())
         self.record_button = C.button("Start Dictation", lambda _s: self.controller.toggle(),
                                       self._keeper, prominent=True)
+        self.quick_button = C.icon_button(
+            "text.bubble", "Quick Dictate — or tap the hotkey twice from any app",
+            lambda _s: on_quick() if on_quick else None, self._keeper)
 
         self.segments = self._build_segments()
         self.pane_host = C.stack([], spacing=0)
@@ -154,7 +158,7 @@ class MainWindow:
 
         row = C.stack(
             [self.state_pill, meter_column, C.spacer(),
-             self.device_popup, self.record_button],
+             self.device_popup, self.quick_button, self.record_button],
             vertical=False, spacing=T.SPACE["xl"],
         )
         self.state_pill.widthAnchor().constraintEqualToConstant_(T.METRIC["state_pill_width"]).setActive_(True)

@@ -128,6 +128,8 @@ class MenuBarItem:
         self.menu.addItem_(self.hotkey_item)
         self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self.menu.addItem_(self.toggle_item)
+        if "quick" in self.handlers:
+            self.menu.addItem_(self._entry("Quick Dictate…", self.handlers["quick"]))
         self.menu.addItem_(self._microphone_item())
         self.menu.addItem_(AppKit.NSMenuItem.separatorItem())
         self.menu.addItem_(self._entry(f"Open {APP_NAME}", self.handlers["open_main"]))
