@@ -139,11 +139,53 @@ hallway, or a draft before you know where it is going. The grey preview is off
 for cloud engines, where every preview would be an upload; set
 `quick_dictate.double_tap` to `false` if two quick taps ever open it by accident.
 
+**Hotkey dictation is transcribed while you speak.** Each phrase is done at
+the pause after it, so releasing the key leaves only the last phrase — the wait
+no longer grows with how long you talked, and silence is never sent to the
+engine. If anything goes wrong mid-way, the whole recording is transcribed the
+old way instead. `dictation.live: false` turns it off.
+
+**Smarter dictation.**
+* Say **"scratch that"** on its own to remove the dictation you just made
+  (within a minute, in the same app).
+* **Snippets** (Settings → Snippets): say "insert my signature" and your saved
+  signature is typed.
+* **Formatting follows the app**: no final period in Messages, Slack, WhatsApp
+  or Teams; exactly as spoken — no capital, no trailing space — in Terminal and
+  code editors. Change any app in `app_styles`.
+* **Scripture references** are written the printed way: "John three sixteen" →
+  John 3:16, "first Corinthians thirteen four through seven" → 1 Corinthians
+  13:4-7. Books that are also names (John, Mark, James…) need a chapter *and*
+  verse, so "John two" stays as said. `postprocess.scripture: false` turns it off.
+
 **Dictation never waits for a file.** Files have their own queue: transcribe a
 two-hour recording and keep dictating with the hotkey while it runs. The menu
 bar's *Transcribing* means your dictation is on its way; a file's progress is
 in its own window. (With Parakeet both share one model, so a dictation may wait
 a moment for the file's current ten-second piece.)
+
+**Several files at once, and watch folders.** Choose or drop several files and
+each gets a row in the queue in the Transcribe pane — progress, Open when done,
+✕ to stop one. **Settings → Watch Folders** goes further: new recordings that
+appear in a folder (a "Sunday Recordings" folder, a recorder's import folder)
+are transcribed automatically and saved as Word, PDF, text or Markdown in a
+`Transcripts` folder beside them. A file is taken only once it has finished
+copying, never twice, and a folder's existing recordings only if you say so.
+
+**Edit a transcript and teach the Dictionary.** **Edit** in the transcript
+window lets you fix the words; **Done** saves them into every layout (timings
+kept) and offers each short fix — "Romans ate" → "Romans 8" — as a Dictionary
+correction, so it is fixed automatically next time.
+
+**Speaker labels on this Mac.** Models → **Speaker Detection** → Set Up
+installs one package and downloads two small models (~35 MB). After that,
+files transcribed with Parakeet or Whisper get "Speaker 1 / Speaker 2" labels
+too, without uploading anything. Choose the number of people when you know
+it — more reliable than Automatic.
+
+**The Dictionary on every Mac.** Settings → Sync keeps it in iCloud Drive, so a
+correction taught on one Mac works on the others. Turning it on merges; nothing
+is replaced.
 
 **Transcripts** (`⌘3`) — every file you transcribe is kept. Search across all
 of them at once (titles, full text and speaker names), open any one back into
@@ -288,7 +330,7 @@ the clipboard), `clipboard` (copy only).
 | `faster_whisper` | CPU, int8. The Intel default; also works on Apple Silicon |
 | `whisper_cpp` | Offline fallback. No Python ML stack, but reloads the model every dictation |
 | `deepgram` | Cloud. Transcription **and** cleanup in one call, plus keyterm prompting. `diarize: true` for speakers |
-| `openai` | Cloud. Whisper via an OpenAI-compatible endpoint. Long files are sent in 10-minute pieces (the API caps uploads at 25 MB) |
+| `openai` | Cloud. Whisper via an OpenAI-compatible endpoint. Long files go up as FLAC in 10-minute pieces, three at a time (the API caps uploads at 25 MB) |
 | `groq` | Cloud. Whisper Large v3 Turbo on Groq — fast and inexpensive. Same chunking as `openai` |
 | `assemblyai` | Cloud. Built for recordings: speaker labels included, language detected |
 | `elevenlabs` | Cloud. ElevenLabs Scribe: word timings, speaker labels, strong on accents and other languages |
@@ -355,7 +397,9 @@ rules, the latency budget, and who owns cleanup.
   ElevenLabs calls, and model downloads from Hugging Face. All are tested
   against a local server that plays the service (request shape, chunking,
   polling, timings, errors, cancelled downloads), not against the services.
-* **Never run on a Mac yet** — Quick Dictate, the Models window, the Transcripts pane, the
+* **Never run on a Mac yet** — live hotkey dictation, "scratch that" and per-app
+  formatting, the queue and watch folders, Edit mode, Speaker Detection setup,
+  iCloud sync, Quick Dictate, the Models window, the Transcripts pane, the
   rebuilt transcript window (views, search, speaker names, export), and the
   file-engine setting. Their logic is tested; their layout has not been seen.
   Word and PDF output is checked against real readers (python-docx, pypdf,
@@ -438,6 +482,12 @@ src/aloud/
   documents.py    Word and PDF, written directly (no extra dependency)
   library.py      the saved transcripts, and searching them
   live.py         transcribing while you speak: pauses, commits, previews
+  scripture.py    "John three sixteen" -> "John 3:16"
+  learn.py        edits -> Dictionary corrections, and edits back into timings
+  voice.py        "scratch that", snippets, formatting per app
+  watch.py        watch folders
+  diarize.py      speaker labels on this Mac (sherpa-onnx)
+  sync.py         the Dictionary in iCloud Drive
   models.py       the local model catalog and its downloader
   dictionary.py   entries, and the hand-editable JSON behind them
   corrections.py  the correction pass and its risk analysis
@@ -449,7 +499,7 @@ src/aloud/
     components.py token-driven building blocks
     main_window.py · history_view.py · dictionary_view.py
     settings_window.py · models_window.py · transcript_window.py · library_view.py
-    quick_dictate_window.py
+    quick_dictate_window.py · queue_view.py
     menu_bar.py · app_menu.py · meter.py
     formatting.py presentation logic with no AppKit in it
 scripts/          bootstrap · model download · icon · app build
